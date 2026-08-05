@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Suivi des Acquis</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="SuiviComp">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .sync-dot { font-size:12px; cursor:default; padding:4px 2px; border-radius:4px; flex-shrink:0; }
+    .sync-local   { opacity:.5; }
+    .sync-syncing { animation:pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    /* Bannière d'installation PWA */
+    #install-banner {
+      display:none; position:fixed; bottom:0; left:0; right:0;
+      background:#1e293b; color:#f1f5f9; padding:12px 16px;
+      display:flex; align-items:center; gap:12px; z-index:999;
+      font-size:13px; box-shadow:0 -2px 12px rgba(0,0,0,.3);
+    }
+    #install-banner button { flex-shrink:0; }
+    #install-banner .ib-close { background:none; border:none; color:#94a3b8; cursor:pointer; padding:4px; font-size:16px; margin-left:auto; }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="logo" id="logo-btn">Suivi <span>des Acquis</span></div>
+    <nav class="breadcrumb" id="breadcrumb" aria-label="Navigation"></nav>
+    <div class="topbar-right" id="topbar-right"></div>
+  </header>
+
+  <main id="main-content" role="main"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="export-fab" style="display:none;position:fixed;bottom:20px;right:20px;z-index:90">
+    <button class="btn btn-sm" onclick="openModal('exportCSV')">⬇ Export CSV</button>
+  </div>
+
+  <!-- Bannière installation PWA (Android) -->
+  <div id="install-banner" style="display:none">
+    <img src="icon-192.png" width="36" height="36" style="border-radius:8px">
+    <div><strong>Installer l'application</strong><br><span style="font-size:11px;color:#94a3b8">Accès rapide depuis votre écran d'accueil</span></div>
+    <button class="btn btn-primary btn-sm" id="install-btn">Installer</button>
+    <button class="ib-close" onclick="document.getElementById('install-banner').style.display='none'">✕</button>
+  </div>
+
+  <!-- Supabase client CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Config Supabase -->
+  <script src="config.js"></script>
+  <!-- Couche données -->
+  <script src="db.js"></script>
+  <!-- Application -->
+  <script src="prog_codes.js"></script>
+  <script src="specialites.js"></script>
+  <script src="app.js"></script>
+
+  <script>
+    // Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').then(reg => {
+        reg.addEventListener('updatefound', () => {
+          const newSW = reg.installing;
+          newSW.addEventListener('statechange', () => {
+            if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+              // Nouvelle version disponible
+              if (confirm('Une mise à jour est disponible. Recharger ?')) {
+                newSW.postMessage('skipWaiting');
+                window.location.reload();
+              }
+            }
+          });
+        });
+      }).catch(e => console.log('SW:', e));
+    }
+
+    // Prompt installation PWA (Android Chrome)
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault();
+      deferredPrompt = e;
+      document.getElementById('install-banner').style.display = 'flex';
+      document.getElementById('install-btn').onclick = async () => {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        document.getElementById('install-banner').style.display = 'none';
+        deferredPrompt = null;
+      };
+    });
+
+    // Patch render pour FAB
+    const _r = render;
+    window.render = function(){ _r(); updateFab(); };
+    render();
+  </script>
+
+</body>
+</html>

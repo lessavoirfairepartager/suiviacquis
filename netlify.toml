@@ -1,0 +1,9 @@
+[build]
+  publish = "."
+  command = "node inject-config.js"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+    X-Frame-Options = "SAMEORIGIN"

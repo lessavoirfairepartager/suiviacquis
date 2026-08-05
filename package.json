@@ -1,0 +1,8 @@
+{
+  "name": "suivi-competences",
+  "version": "1.0.0",
+  "description": "Outil de suivi des compétences",
+  "scripts": {
+    "build": "node inject-config.js"
+  }
+}
