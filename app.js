@@ -141,11 +141,57 @@ function currentSchoolYear() {
   return now.getMonth() >= 8 ? `${y}-${y+1}` : `${y-1}-${y}`;
 }
 
+// Année scolaire suivant l'année courante, ex: "2026-2027"
+function nextSchoolYear() {
+  const [a] = currentSchoolYear().split('-').map(Number);
+  return `${a+1}-${a+2}`;
+}
+
 // Liste triée des années présentes dans les classes
 function allSchoolYears() {
   const years = new Set(D.classes.map(cl => cl.annee || currentSchoolYear()));
   return [...years].sort().reverse(); // plus récente en premier
 }
+
+// Construit les <option> du sélecteur d'année scolaire : années déjà utilisées
+// + année courante + année suivante (proposée d'office), triées, plus une entrée
+// "Autre année…" qui ouvre une saisie libre (voir handleAnneeSelect).
+function schoolYearOptionsHTML(selected) {
+  const cy = currentSchoolYear(), ny = nextSchoolYear();
+  const ay = new Set(allSchoolYears());
+  ay.add(cy); ay.add(ny);
+  if (selected) ay.add(selected);
+  const list = [...ay].sort().reverse();
+  let opts = list.map(y =>
+    `<option value="${y}"${y===selected?' selected':''}>${y}</option>`
+  ).join('');
+  opts += `<option value="__custom__">➕ Autre année…</option>`;
+  return opts;
+}
+
+// Gère le choix "Autre année…" dans un sélecteur d'année scolaire :
+// demande une saisie libre, la valide, l'ajoute à la liste et la sélectionne.
+window.handleAnneeSelect = function(sel) {
+  if (sel.value !== '__custom__') return;
+  const suggestion = nextSchoolYear();
+  const prevValue = sel.dataset.prev || currentSchoolYear();
+  let y = prompt('Année scolaire (format AAAA-AAAA) :', suggestion);
+  if (!y || !y.trim()) { sel.value = prevValue; return; }
+  y = y.trim();
+  if (!/^\d{4}-\d{4}$/.test(y) || Number(y.slice(5)) !== Number(y.slice(0,4))+1) {
+    alert('Format invalide. Exemple : 2026-2027 (deux années consécutives).');
+    sel.value = prevValue; return;
+  }
+  const existing = [...sel.options].find(o => o.value === y);
+  if (existing) { sel.value = y; }
+  else {
+    const opt = document.createElement('option');
+    opt.value = y; opt.textContent = y;
+    sel.insertBefore(opt, sel.querySelector('option[value="__custom__"]'));
+    sel.value = y;
+  }
+  sel.dataset.prev = y;
+};
 
 // Affiche prénom uniquement en vue élève (RGPD), nom complet en mode prof
 // Détection : mot tout en MAJUSCULES = NOM, mot Capitalisé = Prénom
@@ -423,6 +469,7 @@ function renderHome(mc) {
         <div style="position:absolute;bottom:8px;right:8px;display:flex;gap:4px" onclick="event.stopPropagation()">
           <button class="btn btn-xs" onclick="openModal('editClass','${cl.id}')" title="Modifier">✏</button>
           <button class="btn btn-xs" onclick="openModal('transferClass','${cl.id}')" title="Transférer à un collègue">🔁</button>
+          <button class="btn btn-xs btn-danger" onclick="deleteItem('class','${cl.id}')" title="Supprimer la classe">🗑</button>
         </div>
       </div>`;
     });
@@ -1142,6 +1189,15 @@ window.renameItem=function(type,id,parentId){
 };
 window.deleteItem=function(type,id,parentId){
   const cl=curClass();
+  if(type==='class'){
+    const cl0=getClass(id);
+    if(!cl0){return;}
+    if(!confirm(`Supprimer la classe "${cl0.name}" (${cl0.annee||''}) et TOUTES ses données (élèves, séquences, notes) ?\nCette action est irréversible.`)) return;
+    D.classes=D.classes.filter(c=>c.id!==id);
+    if(nav.classId===id){ nav={screen:'home',classId:null,seqId:null}; }
+    saveData();render();toast('✓ Classe supprimée');
+    return;
+  }
   if(type==='student'){
     if(!confirm('Supprimer cet élève ? Toutes ses données seront perdues.')) return;
     cl.students=cl.students.filter(s=>s.id!==id); saveData();render();toast('✓ Élève supprimé');
@@ -1246,15 +1302,13 @@ window.openModal=function(type,extra){
       </div>`;
     showConfirm=false;
   } else if(type==='addClass'){
-    const _cy=currentSchoolYear();
-    const _ay=allSchoolYears();
-    if(!_ay.includes(_cy)) _ay.unshift(_cy);
-    const _yearOpts=_ay.map(y=>`<option value="${y}"${y===(_nav_anneeFilter||_cy)?' selected':''}>${y}</option>`).join('');
+    const _cySel=_nav_anneeFilter||currentSchoolYear();
+    const _yearOpts=schoolYearOptionsHTML(_cySel);
     html=`<div class="modal-title">Nouvelle classe</div>
       <div class="form-group"><label class="form-label">Nom de la classe</label>
         <input class="form-input" id="m-name" placeholder="Ex: 2MSPC" autofocus></div>
       <div class="form-group"><label class="form-label">Année scolaire</label>
-        <select class="form-select" id="m-annee">${_yearOpts}</select></div>
+        <select class="form-select" id="m-annee" data-prev="${_cySel}" onchange="handleAnneeSelect(this)">${_yearOpts}</select></div>
       <div class="form-group"><label class="form-label">Niveau</label>
         <select class="form-select" id="m-niv" onchange="toggleSpeWrap(this.value)">
           <option value="3eme">3ème (Cycle 4 — collège)</option>
@@ -1272,16 +1326,13 @@ window.openModal=function(type,extra){
   } else if(type==='editClass'){
     const clE=getClass(extra); if(!clE){closeModal();return;}
     const speJson=JSON.stringify(clE.specialites||[]).replace(/"/g,'&quot;');
-    const _cy2=currentSchoolYear();
-    const _ay2=allSchoolYears();
-    if(!_ay2.includes(_cy2)) _ay2.unshift(_cy2);
-    const _clAnnee=clE.annee||_cy2;
-    const _yearOpts2=_ay2.map(y=>`<option value="${y}"${y===_clAnnee?' selected':''}>${y}</option>`).join('');
+    const _clAnnee=clE.annee||currentSchoolYear();
+    const _yearOpts2=schoolYearOptionsHTML(_clAnnee);
     html=`<div class="modal-title">Modifier la classe</div>
       <div class="form-group"><label class="form-label">Nom de la classe</label>
         <input class="form-input" id="m-name" value="${esc(clE.name)}" autofocus></div>
       <div class="form-group"><label class="form-label">Année scolaire</label>
-        <select class="form-select" id="m-annee">${_yearOpts2}</select></div>
+        <select class="form-select" id="m-annee" data-prev="${_clAnnee}" onchange="handleAnneeSelect(this)">${_yearOpts2}</select></div>
       <div class="form-group"><label class="form-label">Niveau</label>
         <select class="form-select" id="m-niv" onchange="toggleSpeWrap(this.value)">
           <option value="3eme"${clE.niveau==='3eme'?' selected':''}>3ème (Cycle 4 — collège)</option>
