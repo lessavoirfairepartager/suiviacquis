@@ -236,6 +236,33 @@ function getSD(act,stId) {
   return sd;
 }
 
+// ── Groupes d'élèves (groupe1/groupe2, sections TRPM/MSPM…) ──────────────────
+const GROUPE_COLORS=['#ef4444','#f97316','#eab308','#22c55e','#14b8a6','#3b82f6','#6366f1','#a855f7','#ec4899','#64748b'];
+function getGroupes(cl)      { return cl.groupes||[]; }
+function getGroupe(cl,id)    { return getGroupes(cl).find(g=>g.id===id); }
+function nextGroupeColor(cl) {
+  const used=getGroupes(cl).map(g=>g.couleur);
+  return GROUPE_COLORS.find(c=>!used.includes(c))||GROUPE_COLORS[getGroupes(cl).length%GROUPE_COLORS.length];
+}
+// Puces colorées à afficher devant le nom d'un élève (tableaux, listes)
+function groupeDotsHTML(cl,st){
+  const ids=st.groupeIds||[];
+  if(!ids.length) return '';
+  const dots=ids.map(id=>{
+    const g=getGroupe(cl,id); if(!g) return '';
+    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.couleur};margin-right:2px;flex:none" title="${esc(g.nom)}"></span>`;
+  }).join('');
+  return dots?`<span style="display:inline-flex;align-items:center;vertical-align:middle;margin-right:3px">${dots}</span>`:'';
+}
+// Légende compacte des groupes définis (couleur + nom), pour décoder les puces sans survol
+function groupesLegendHTML(cl){
+  const gs=getGroupes(cl); if(!gs.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px">${gs.map(g=>
+    `<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:var(--bg3);border:1px solid var(--border);font-size:10px">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.couleur};flex:none"></span>${esc(g.nom)}
+    </span>`).join('')}</div>`;
+}
+
 // ── Score ────────────────────────────────────────────────────────────────────
 function computeScore(act, stId) {
   const sd      = (act.studentData||{})[stId]||{};
@@ -574,10 +601,12 @@ function renderClass(mc) {
     h+=`<div class="section-hdr" style="margin-top:20px">
       <span class="section-title">Élèves</span>
       <span class="badge">${sts.length} élève${sts.length>1?'s':''}</span>
+      <button class="btn btn-sm" style="margin-left:auto" onclick="openModal('manageGroupes')" title="Créer et affecter des groupes">🎨 Groupes</button>
     </div>`;
+    h+=groupesLegendHTML(cl);
     h+=`<div class="student-pills">`;
     sts.forEach(st=>{
-      h+=`<div class="student-pill">${esc(st.name)}`;
+      h+=`<div class="student-pill">${groupeDotsHTML(cl,st)}${esc(st.name)}`;
       h+=`<button class="pill-del" onclick="deleteItem('student','${st.id}')" title="Supprimer">✕</button>`;
       h+=`</div>`;
     });
@@ -637,7 +666,7 @@ function renderGlobalView(cl) {
     });
 
     sts.forEach(st=>{
-      h+=`<tr><td class="td-student">${displayName(st.name,false)}</td>`;
+      h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
       acts.forEach(act=>{
         const _sdGV=(act.studentData||{})[st.id]||{};
         const mm=_sdGV.manualMark;
@@ -699,7 +728,7 @@ function renderGlobalView(cl) {
       h+=`</tr></thead><tbody>`;
       sts.forEach(st=>{
         const sLvls=computeSocleAcq(cl,sq,st.id);
-        h+=`<tr><td class="td-student">${displayName(st.name,false)}</td>`;
+        h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
         SOCLE.forEach(dom=>{
           const lv=sLvls[dom.id];
           if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3)">·</td>`;return;}
@@ -733,6 +762,7 @@ function renderSeq(mc) {
   (cl.sequences||[]).forEach(s=>h+=`<button class="seq-tab${s.id===nav.seqId?' active':''}" onclick="goSeq('${s.id}')">${esc(s.name)}</button>`);
   if(D.isProfMode) h+=`<button class="seq-tab seq-tab-more" onclick="openModal('addSeq')" title="Nouvelle séquence">+</button>`;
   h+=`</div><div class="page">`;
+  h+=groupesLegendHTML(cl);
   if(!acts.length) h+=`<div class="no-data">Aucune activité.${D.isProfMode?' Cliquez sur "+ Activité".':''}</div>`;
   else acts.forEach(act=>{
     try { h+=renderActivity(act,sts,cl,false); }
@@ -800,7 +830,7 @@ function renderActivity(act,sts,cl,forProj) {
       });
       h+=`</tr></thead><tbody>`;
       sts.forEach(st=>{
-        h+=`<tr><td class="td-student">${displayName(st.name,false)}</td>`;
+        h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
         qcms.forEach(q=>{
           const score=(q.scores||{})[st.id];
           const isA=score==='A', isN=score==='N', isSpecial=isA||isN;
@@ -921,7 +951,7 @@ function renderActTable(act,sts,cl,forProj) {
     const pres=_sd.presence||{}, ch=_sd.checks||{}, tae=_sd.tae||{};
     const allAbsent=sessions.length>0&&sessions.every(s=>['absent','exclu','none'].includes(pres[s.id]||'none')&&(pres[s.id]||'none')!=='retard');
 
-    h+=`<tr><td class="td-student">${displayName(st.name,false)}</td>`;
+    h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
 
     sessions.forEach((sess,si)=>{
       const p=pres[sess.id]||'none';
@@ -1446,6 +1476,22 @@ window.openModal=function(type,extra){
       }
     }
     showConfirm=false;
+  } else if(type==='manageGroupes'){
+    const cl=curClass(); if(!cl) return;
+    html=`<div class="modal-title">🎨 Groupes de la classe</div>
+      <div class="form-group">
+        <label class="form-label">Groupes définis</label>
+        <div id="groupes-list"></div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input class="form-input" id="m-new-groupe" placeholder="Ex: Groupe 1, TRPM, MSPM…" style="flex:1" onkeydown="if(event.key==='Enter')addGroupe()">
+          <button class="btn btn-sm" onclick="addGroupe()">+ Ajouter</button>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:14px">
+        <label class="form-label">Affecter les élèves <span style="font-weight:400;color:var(--text3);font-size:10px">(touchez un badge pour ajouter/retirer)</span></label>
+        <div id="groupes-assign"></div>
+      </div>`;
+    showConfirm=false;
   }
 
   const ov=document.createElement('div');
@@ -1457,6 +1503,7 @@ window.openModal=function(type,extra){
     </div></div>`;
   ov.addEventListener('click',e=>{if(e.target===ov)closeModal();});
   document.body.appendChild(ov);
+  if(type==='manageGroupes') renderGroupesModal();
   setTimeout(()=>{const f=ov.querySelector('input:not([type=hidden]),textarea');if(f)f.focus();},50);
 };
 
@@ -1464,6 +1511,9 @@ window.closeModal=()=>{
   window._currentSpecialites=[];
   const dd=document.getElementById('m-spe-dropdown-fixed');if(dd)dd.remove();
   const m=document.getElementById('modal-overlay');if(m)m.remove();
+  // Rafraîchit la page derrière la modale (utile pour les modales "live" comme
+  // Groupes, qui modifient les données sans rappeler render() à chaque clic).
+  if(typeof render==='function') render();
 };
 
 // ── Spécialités autocomplete ─────────────────────────────────────────────────
@@ -1557,6 +1607,81 @@ function renderSelectedSpecialites(){
     </span>`;
   }).join('');
 }
+
+// ── Modal Groupes : gestion + affectation, se rafraîchit sur place ───────────
+function renderGroupesModal(){
+  const cl=curClass(); if(!cl) return;
+  const listEl=document.getElementById('groupes-list');
+  const assignEl=document.getElementById('groupes-assign');
+  if(!listEl||!assignEl) return;
+  const groupes=getGroupes(cl);
+
+  listEl.innerHTML = groupes.length ? groupes.map(g=>`
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)">
+      <button onclick="recolorGroupe('${g.id}')" title="Changer la couleur"
+        style="width:18px;height:18px;border-radius:50%;border:1px solid var(--border2);background:${g.couleur};cursor:pointer;padding:0;flex:none"></button>
+      <span style="flex:1;font-size:13px;cursor:pointer" onclick="renameGroupe('${g.id}')" title="Renommer">${esc(g.nom)}</span>
+      <button class="btn btn-xs btn-icon" style="color:var(--red)" onclick="deleteGroupe('${g.id}')" title="Supprimer le groupe">✕</button>
+    </div>`).join('')
+    : `<div class="no-data" style="padding:8px 0;font-size:12px">Aucun groupe pour l'instant.</div>`;
+
+  const sts=cl.students||[];
+  assignEl.innerHTML = !groupes.length ? ''
+    : !sts.length ? `<div class="no-data" style="padding:8px 0;font-size:12px">Aucun élève dans cette classe.</div>`
+    : sts.map(st=>{
+        const ids=st.groupeIds||[];
+        const chips=groupes.map(g=>{
+          const on=ids.includes(g.id);
+          return `<span onclick="toggleStudentGroupe('${st.id}','${g.id}')"
+            style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:10px;font-size:10px;cursor:pointer;
+              border:1px solid ${on?g.couleur:'var(--border)'};background:${on?g.couleur:'var(--bg3)'};color:${on?'#fff':'var(--text2)'}">
+            ${esc(g.nom)}</span>`;
+        }).join(' ');
+        return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap">
+          <span style="min-width:100px;font-size:12px">${esc(st.name)}</span>
+          <span style="display:flex;gap:4px;flex-wrap:wrap">${chips}</span>
+        </div>`;
+      }).join('');
+}
+window.addGroupe=function(){
+  const cl=curClass(); if(!cl) return;
+  const input=document.getElementById('m-new-groupe');
+  const nom=(input.value||'').trim(); if(!nom) return;
+  if(!cl.groupes) cl.groupes=[];
+  cl.groupes.push({id:uid(),nom,couleur:nextGroupeColor(cl)});
+  input.value='';
+  saveData(); renderGroupesModal();
+};
+window.renameGroupe=function(id){
+  const cl=curClass(); if(!cl) return;
+  const g=getGroupe(cl,id); if(!g) return;
+  const nom=prompt('Nom du groupe :',g.nom); if(!nom||!nom.trim()) return;
+  g.nom=nom.trim();
+  saveData(); renderGroupesModal();
+};
+window.recolorGroupe=function(id){
+  const cl=curClass(); if(!cl) return;
+  const g=getGroupe(cl,id); if(!g) return;
+  const cur=GROUPE_COLORS.indexOf(g.couleur);
+  g.couleur=GROUPE_COLORS[(cur+1+GROUPE_COLORS.length)%GROUPE_COLORS.length];
+  saveData(); renderGroupesModal();
+};
+window.deleteGroupe=function(id){
+  const cl=curClass(); if(!cl) return;
+  const g=getGroupe(cl,id); if(!g) return;
+  if(!confirm(`Supprimer le groupe "${g.nom}" ? Les élèves n'en feront plus partie.`)) return;
+  cl.groupes=cl.groupes.filter(x=>x.id!==id);
+  (cl.students||[]).forEach(st=>{ if(st.groupeIds) st.groupeIds=st.groupeIds.filter(gid=>gid!==id); });
+  saveData(); renderGroupesModal();
+};
+window.toggleStudentGroupe=function(stId,groupeId){
+  const cl=curClass(); if(!cl) return;
+  const st=(cl.students||[]).find(s=>s.id===stId); if(!st) return;
+  if(!st.groupeIds) st.groupeIds=[];
+  const i=st.groupeIds.indexOf(groupeId);
+  if(i>=0) st.groupeIds.splice(i,1); else st.groupeIds.push(groupeId);
+  saveData(); renderGroupesModal();
+};
 
 window.doModal=function(){
   const t=mState.type;
