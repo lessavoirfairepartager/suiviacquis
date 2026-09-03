@@ -12,9 +12,17 @@
    ✓ BUG 4 — visibilitychange visible déclenche une vraie re-sync (pas juste l'indicateur)
    ✓ BUG 5 — render() appelé après un sync déclenché par le polling
    ✓ Debounce réduit de 1500ms à 400ms (moins de fenêtre de perte)
+   ✓ BUG 6 — "Gel" pendant une saisie rapide (appel, TAE...) quand un autre
+     appareil/onglet est aussi connecté : chaque mise à jour distante reçue en
+     Realtime remplaçait entièrement D et relançait un render() complet, même
+     en pleine frappe. Ajout d'une garde d'activité locale récente : pendant
+     ACTIVITY_GUARD_MS après un clic, les mises à jour distantes (Realtime ET
+     polling) sont ignorées ; le polling suivant (30s) ou le retour au calme
+     rattrape l'état sans interrompre la saisie en cours.
 ============================================= */
 
 const STORE_KEY = 'suiviComp_v5';
+const ACTIVITY_GUARD_MS = 1500; // fenêtre pendant laquelle on ne laisse pas une synchro entrante interrompre une saisie locale
 
 let _sb          = null;
 window._sb       = null;
@@ -23,6 +31,8 @@ let _saveTimer   = null;
 let _channel     = null;
 let _currentUser = null;
 let _syncInProgress = false; // garde pour éviter les syncs concurrentes
+let _lastLocalActivity = 0;  // horodatage du dernier clic/saisie local(e)
+let _explicitLogout = false; // true seulement si logoutProfAuth() a été appelé volontairement
 
 // ── Initialisation ───────────────────────────────────────────────────────────
 async function initDB() {
@@ -66,10 +76,33 @@ async function initDB() {
           _checkAndSyncIfNewer();
         }
       } else if (event === 'SIGNED_OUT') {
-        _currentUser = null;
-        D.isProfMode = false;
-        if (typeof render === 'function') render();
-        setSyncState('local');
+        if (_explicitLogout) {
+          // Déconnexion volontaire (bouton "Se déconnecter") : rien à tenter.
+          _explicitLogout = false;
+          _currentUser = null;
+          D.isProfMode = false;
+          if (typeof render === 'function') render();
+          setSyncState('local');
+        } else {
+          // ── BUG 7 FIX : perte de session INATTENDUE ─────────────────────
+          // Le SDK Supabase peut se déconnecter tout seul si le rafraîchissement
+          // du jeton échoue au mauvais moment (wifi/4G-5G instable en salle de
+          // classe). Sans ce correctif, le prof bascule immédiatement et
+          // silencieusement en mode lecture seule ("mode élève"), en pleine
+          // saisie, sans explication — perçu comme un gel/déconnexion.
+          // On tente d'abord une reconnexion silencieuse ; si elle réussit,
+          // rien de visible ne se passe pour le prof. Sinon, on bascule en
+          // lecture seule MAIS avec un message clair expliquant quoi faire.
+          setSyncState('syncing');
+          const recovered = await _attemptSilentReconnect();
+          if (!recovered) {
+            _currentUser = null;
+            D.isProfMode = false;
+            if (typeof render === 'function') render();
+            setSyncState('disconnected');
+            toast('🔌 Connexion perdue — mode lecture seule. Touchez ⚙ pour vous reconnecter.');
+          }
+        }
       }
     });
 
@@ -105,6 +138,8 @@ async function initDB() {
 // ── Vérification légère : sync seulement si Supabase est plus récent ─────────
 async function _checkAndSyncIfNewer() {
   if (!_sb || !_currentUser || _syncInProgress) return;
+  // ── BUG 6 FIX : ne pas interrompre une saisie locale en cours (appel, TAE...) ──
+  if (Date.now() - _lastLocalActivity < ACTIVITY_GUARD_MS) return;
   try {
     const { data } = await _sb
       .from('app_data')
@@ -158,8 +193,40 @@ async function signupProf(email, password, inviteCode) {
 }
 window.signupProf = signupProf;
 
+// ── BUG 7 FIX : reconnexion silencieuse après une perte de session inattendue ──
+// Quelques tentatives rapprochées : couvre le cas très fréquent d'un simple
+// aléa réseau (quelques secondes) sans obliger le prof à ressaisir son mot de
+// passe en plein cours.
+async function _attemptSilentReconnect(retries = 3, delayMs = 1200) {
+  if (!_sb) return false;
+  for (let i = 0; i < retries; i++) {
+    await new Promise(r => setTimeout(r, delayMs));
+    try {
+      let session = (await _sb.auth.getSession()).data.session;
+      if (!session) {
+        const refreshed = await _sb.auth.refreshSession();
+        session = refreshed.data && refreshed.data.session;
+      }
+      if (session) {
+        _currentUser = session.user;
+        await syncFromSupabase();
+        startRealtime();
+        D.isProfMode = true;
+        if (typeof render === 'function') render();
+        setSyncState('synced');
+        toast('✓ Reconnecté automatiquement');
+        return true;
+      }
+    } catch (e) {
+      // on retente au tour suivant
+    }
+  }
+  return false;
+}
+
 // ── Déconnexion ───────────────────────────────────────────────────────────────
 async function logoutProfAuth() {
+  _explicitLogout = true;
   // Flush d'abord les données en attente
   if (_saveTimer) {
     clearTimeout(_saveTimer);
@@ -240,6 +307,7 @@ async function pushToSupabase() {
 
 // ── Sauvegarde ────────────────────────────────────────────────────────────────
 function saveData() {
+  _lastLocalActivity = Date.now(); // BUG 6 FIX : marque une activité locale récente
   D._ts = D._ts || Date.now();
   const toLocal = { ...D, isProfMode: false };
   localStorage.setItem(STORE_KEY, JSON.stringify(toLocal));
@@ -273,6 +341,11 @@ function startRealtime() {
         if (remoteTs > (D._ts || 0)) {
           // Ne pas écraser si un push local est en cours (le push aura la priorité)
           if (_saveTimer) return;
+          // ── BUG 6 FIX : ne pas interrompre une saisie locale en cours ──────
+          // (ex. appel en cours) par un remplacement + re-rendu complet.
+          // Le polling (30s) ou le prochain événement rattrapera l'état une
+          // fois la saisie terminée.
+          if (Date.now() - _lastLocalActivity < ACTIVITY_GUARD_MS) return;
           const fresh = payload.new.data;
           fresh._ts        = remoteTs;
           fresh.isProfMode = false; // isProfMode n'est jamais persisté
@@ -308,7 +381,19 @@ function loadLocalData() {
 
 // ── Actions exposées ──────────────────────────────────────────────────────────
 window.forceSyncFromSupabase = async function() {
-  if (!_sb || !_currentUser) { toast('⚠️ Non connecté'); return; }
+  if (!_sb) { toast('⚠️ Mode local uniquement'); return; }
+  if (!_currentUser) {
+    // Session perdue : on tente une reconnexion silencieuse avant de renvoyer
+    // au formulaire de connexion (évite de dire juste "Non connecté" sans rien
+    // proposer pour s'en sortir).
+    toast('🔄 Tentative de reconnexion...');
+    const recovered = await _attemptSilentReconnect(1, 300);
+    if (!recovered) {
+      if (typeof openModal === 'function') openModal('login');
+      else toast('⚠️ Non connecté');
+    }
+    return;
+  }
   await syncFromSupabase();
   if (typeof render === 'function') render();
   toast(_syncState === 'synced' ? '✓ Synchronisé' : '⚠️ Erreur de sync');
@@ -354,10 +439,11 @@ function setSyncState(state) {
   const el = document.getElementById('sync-indicator');
   if (!el) return;
   const states = {
-    local:   { dot:'⚪', tip:'Mode local',                cls:'sync-local'   },
-    syncing: { dot:'🔵', tip:'Synchronisation...',        cls:'sync-syncing' },
-    synced:  { dot:'🟢', tip:'Synchronisé avec Supabase', cls:'sync-ok'      },
-    error:   { dot:'🔴', tip:'Erreur Supabase',           cls:'sync-err'     },
+    local:        { dot:'⚪', tip:'Mode local',                             cls:'sync-local'   },
+    syncing:      { dot:'🔵', tip:'Synchronisation...',                     cls:'sync-syncing' },
+    synced:       { dot:'🟢', tip:'Synchronisé avec Supabase',              cls:'sync-ok'      },
+    error:        { dot:'🔴', tip:'Erreur Supabase',                        cls:'sync-err'     },
+    disconnected: { dot:'🔴', tip:'Session perdue — reconnexion nécessaire', cls:'sync-err'     },
   };
   const s = states[state] || states.local;
   el.textContent = s.dot; el.title = s.tip; el.className = 'sync-dot ' + s.cls;

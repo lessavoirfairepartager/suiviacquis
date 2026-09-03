@@ -1278,10 +1278,11 @@ window.openModal=function(type,extra){
         <div class="form-hint">Défaut : prof1234</div></div>`;
   } else if(type==='settings'){
     const syncInfo = {
-      local:   '⚪ Mode local (Supabase non configuré)',
-      syncing: '🔵 Synchronisation en cours...',
-      synced:  '🟢 Synchronisé avec Supabase',
-      error:   '🔴 Erreur — vérifiez config.js',
+      local:        '⚪ Mode local (Supabase non configuré)',
+      syncing:      '🔵 Synchronisation en cours...',
+      synced:       '🟢 Synchronisé avec Supabase',
+      error:        '🔴 Erreur — vérifiez config.js',
+      disconnected: '🔴 Session perdue — touchez "Forcer la synchronisation" pour vous reconnecter',
     }[_syncState||'local'] || '⚪ Mode local';
     html=`<div class="modal-title">Paramètres & Synchronisation</div>
       <div class="form-group">
