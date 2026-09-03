@@ -84,6 +84,20 @@ function computeSocleAcq(cl, sq, stId) {
   });
   return result;
 }
+// Bilan annuel du socle (toutes séquences confondues)
+function computeSocleAcqAnnuelle(cl, stId) {
+  const compLvls = computeCompAcqAnnuelle(cl, stId);
+  const isBAC    = (cl.niveau||'bac_pro') !== '3eme';
+  const result   = {};
+  SOCLE.forEach(dom => {
+    const compIds = isBAC ? dom.comps_bp : dom.comps3;
+    const values  = compIds.map(cid => compLvls[cid]).filter(v => v !== null && v !== undefined);
+    if (!values.length) { result[dom.id] = null; return; }
+    const avgPct = values.reduce((a,b) => a + b.pct, 0) / values.length;
+    result[dom.id] = { pct: avgPct, ...getAcqLevel(avgPct) };
+  });
+  return result;
+}
 
 // ── Store — géré par db.js (Supabase + localStorage) ────────────────────────
 // defaultData() et saveData() sont définis dans db.js
@@ -339,14 +353,16 @@ function scoreLbl(v) { return (v!==null&&v!==undefined)?v.toFixed(1):'—'; }
 // évalués pour chaque compétence, toutes séquences de la CLASSE confondues.
 // "Dernier" = déterminé par la date de séance (ou ordre d'ajout si pas de date).
 // Paramètre sq = séquence courante (pour contexte), cl = classe entière.
-function computeCompAcq(cl, sq, stId, maxLast=3) {
+// ── Acquisition de compétences : calcul auto à partir des items cochés ───────
+// Cœur du calcul, sur un ensemble de séquences donné (borne le "par séquence"
+// vs "annuel"). Prend les N derniers items tagués par compétence (triés par
+// date de séance) et calcule le % de réussite.
+function computeCompAcqScoped(cl, stId, sequences, maxLast=3) {
   const comps = getComps(cl);
-  // Collecter tous les items tagués avec leur date de séance
-  // sur TOUTES les séquences de la classe
   const itemsByComp = {};
   comps.forEach(c=>{ itemsByComp[c.id]=[]; });
 
-  (cl.sequences||[]).forEach(sequence=>{
+  (sequences||[]).forEach(sequence=>{
     (sequence.activities||[]).forEach((act,actIdx)=>{
       const sd       = (act.studentData||{})[stId]||{};
       const pres     = sd.presence||{};
@@ -355,8 +371,6 @@ function computeCompAcq(cl, sq, stId, maxLast=3) {
       const allAbsent = sessions.length>0 && sessions.every(s=>(pres[s.id]||'none')==='absent');
       if(allAbsent) return;
 
-      // Date de référence = date de la dernière séance de l'activité
-      // (ou timestamp basé sur l'index si pas de date)
       const lastSess = sessions.filter(s=>s.date).sort((a,b)=>b.date.localeCompare(a.date))[0];
       const refDate  = lastSess ? lastSess.date : ('0000-'+String(actIdx).padStart(4,'0'));
 
@@ -372,13 +386,10 @@ function computeCompAcq(cl, sq, stId, maxLast=3) {
     });
   });
 
-  // Pour chaque compétence, prendre les N derniers items (triés par date desc)
   const levels = {};
   comps.forEach(c=>{
     const items = itemsByComp[c.id];
     if(!items.length){ levels[c.id]=null; return; }
-
-    // Trier par date décroissante, puis prendre les N derniers
     items.sort((a,b)=> (b.date||'0000').localeCompare(a.date||'0000') || b.itemIdx-a.itemIdx);
     const last  = items.slice(0, maxLast);
     const val   = last.filter(i=>i.checked).length;
@@ -386,6 +397,33 @@ function computeCompAcq(cl, sq, stId, maxLast=3) {
     const pct   = (val/tot)*100;
     levels[c.id] = {pct, ...getAcqLevel(pct), val, tot,
                     info:`${val}/${tot} derniers items`};
+  });
+  return levels;
+}
+// Par séquence : une seule séquence
+function computeCompAcq(cl, sq, stId, maxLast=3) {
+  return computeCompAcqScoped(cl, stId, sq?[sq]:[], maxLast);
+}
+// Annuelle : toutes les séquences de la classe
+function computeCompAcqAnnuelle(cl, stId, maxLast=3) {
+  return computeCompAcqScoped(cl, stId, cl.sequences||[], maxLast);
+}
+// Par activité : ratio direct coché/total sur les items de CETTE activité
+// uniquement (pas de fenêtre "N derniers", une activité a peu d'items).
+function computeCompAcqActivite(act, stId, comps) {
+  const ch = ((act.studentData||{})[stId]||{}).checks||{};
+  const byComp = {};
+  comps.forEach(c=>{ byComp[c.id]=[]; });
+  (act.items||[]).forEach(item=>{
+    if(!item.compId || !byComp[item.compId]) return;
+    byComp[item.compId].push(!!ch[item.id]);
+  });
+  const levels={};
+  comps.forEach(c=>{
+    const arr=byComp[c.id];
+    if(!arr.length){ levels[c.id]=null; return; }
+    const val=arr.filter(Boolean).length, tot=arr.length, pct=(val/tot)*100;
+    levels[c.id]={pct, ...getAcqLevel(pct), val, tot, info:`${val}/${tot} items de l'activité`};
   });
   return levels;
 }
@@ -630,6 +668,8 @@ function renderClass(mc) {
   if(seqs.length>0&&sts.length>0){
     try { h+=renderGlobalView(cl); }
     catch(e){ console.error('[renderGlobalView]',e); h+=`<div class="no-data" style="color:var(--red)">Erreur d'affichage de la vue globale — ${esc(e.message)}</div>`; }
+    try { h+=renderAnnualCompTable(cl); }
+    catch(e){ console.error('[renderAnnualCompTable]',e); h+=`<div class="no-data" style="color:var(--red)">Erreur d'affichage du bilan annuel — ${esc(e.message)}</div>`; }
   }
   if(D.isProfMode){
     const activeCount=activeStudents(cl).length;
@@ -799,6 +839,51 @@ function renderGlobalView(cl) {
   return h;
 }
 
+// ── Bilan annuel des compétences (toutes séquences confondues) ──────────────
+function renderAnnualCompTable(cl) {
+  const sts=visibleStudents(cl);
+  const comps=getComps(cl);
+  const hasComps=(cl.sequences||[]).some(sq=>(sq.activities||[]).some(a=>(a.items||[]).some(it=>it.compId)));
+  if(!hasComps||!sts.length) return '';
+  const isBAC=(cl.niveau||'bac_pro')!=='3eme';
+  let h=`<div class="section-hdr" style="margin-top:14px">
+    <span class="section-title">Bilan annuel des compétences</span>
+    <span style="font-size:10px;color:var(--text3);margin-left:8px">3 derniers items par compétence, toutes séquences confondues</span>
+  </div>`;
+  h+=`<div class="card" style="overflow:hidden;margin-bottom:8px"><div class="table-scroll"><table><thead><tr><th class="th-student">Élève</th>`;
+  comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:42px;background:${c.color};color:${c.text}" title="${esc(c.label)}">${c.short}</th>`);
+  h+=`</tr></thead><tbody>`;
+  sts.forEach(st=>{
+    const lvls=computeCompAcqAnnuelle(cl,st.id);
+    h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+    comps.forEach(c=>{
+      const lv=lvls[c.id];
+      if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3)">·</td>`;return;}
+      h+=`<td style="font-size:10px;font-weight:700;text-align:center;background:${lv.bg};color:${lv.fg};cursor:help" title="${esc(c.label)}\n${lv.label} (${lv.pct.toFixed(0)}%) — ${lv.info}">${lv.id}</td>`;
+    });
+    h+=`</tr>`;
+  });
+  h+=`</tbody></table></div></div>`;
+  if(!isBAC){
+    h+=`<div style="padding:0 0 8px"><div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px">Domaines du socle commun (DNB) — bilan annuel</div>
+      <div class="card" style="overflow:hidden"><div class="table-scroll"><table><thead><tr><th class="th-student">Élève</th>`;
+    SOCLE.forEach(dom=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:48px;background:${dom.color};color:${dom.text}" title="${esc(dom.desc)}">${dom.id}</th>`);
+    h+=`</tr></thead><tbody>`;
+    sts.forEach(st=>{
+      const sLvls=computeSocleAcqAnnuelle(cl,st.id);
+      h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+      SOCLE.forEach(dom=>{
+        const lv=sLvls[dom.id];
+        if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3)">·</td>`;return;}
+        h+=`<td style="font-size:10px;font-weight:700;text-align:center;background:${lv.bg};color:${lv.fg};cursor:help" title="${dom.label}\n${lv.label} (${lv.pct.toFixed(0)}%)">${lv.id}</td>`;
+      });
+      h+=`</tr>`;
+    });
+    h+=`</tbody></table></div></div></div>`;
+  }
+  return h;
+}
+
 window.switchGV=function(sqId){
   document.querySelectorAll('.gv-panel').forEach(p=>p.style.display='none');
   document.querySelectorAll('#gv-tabs .seq-tab').forEach(t=>t.classList.toggle('active',t.dataset.sqid===sqId));
@@ -960,11 +1045,11 @@ function renderActTable(act,sts,cl,forProj) {
     const span=items.length+(canEdit?1:0);
     h+=`<th colspan="${span}" style="border-left:2px solid #6ee7b7;background:#f0fdf4;color:#166534">Items (${items.length})</th>`;
   }
-  // Colonnes observations manuelles de compétences
+  // Colonnes observations de compétences (auto-suggéré + modifiable à la main)
   const hasManualComps=true; // toujours visible si des compétences existent
   if(hasManualComps){
     h+=`<th colspan="${comps.length}" style="border-left:2px solid #a78bfa;background:#f5f3ff;color:#5b21b6;font-size:10px">
-      Obs. compétences${canEdit?` <span style="font-size:8px;color:var(--text3)" title="Clic = cycle NA→PA→A→M">clic pour modifier</span>`:''}
+      Obs. compétences${canEdit?` <span style="font-size:8px;color:var(--text3)" title="Suggestion automatique d'après les items cochés de cette activité (halo léger) ; clic = observation manuelle, cycle NA→PA→A→M">auto + clic pour modifier</span>`:''}
     </th>`;
   }
   h+=`<th rowspan="2" colspan="2" class="th-score-group" style="min-width:74px">Note<br>/10</th></tr>`;
@@ -1040,22 +1125,35 @@ function renderActTable(act,sts,cl,forProj) {
     });
     if(canEdit) h+=`<td style="width:20px;background:var(--bg3)"></td>`;
 
-    // Colonnes observations manuelles de compétences
+    // Colonnes observations de compétences : valeur manuelle si renseignée,
+    // sinon suggestion automatique calculée sur les items de CETTE activité
+    // (halo léger + légère transparence = suggestion, pas une observation
+    // confirmée ; clic = démarre/poursuit une observation manuelle).
     const manComps = ((act.manualComps||{})[st.id]||{});
-    const ACQ_IDS  = ['NA','PA','A','M'];
+    const autoLvls = computeCompAcqActivite(act, st.id, comps);
     comps.forEach((comp,ci)=>{
-      const lvlIdx = manComps[comp.id]; // undefined=non renseigné
-      const acqObj = lvlIdx!==undefined ? ACQ[lvlIdx] : null;
+      const lvlIdx  = manComps[comp.id]; // undefined = pas d'observation manuelle
+      const isManual= lvlIdx!==undefined;
+      const acqObj  = isManual ? ACQ[lvlIdx] : null;
+      const auto    = !isManual ? autoLvls[comp.id] : null;
+      const shown   = acqObj || auto;
+      const bg      = shown ? shown.bg : 'transparent';
+      const fg      = shown ? shown.fg : 'var(--text3)';
+      const isAuto  = !isManual && !!auto;
+      const ring    = isAuto ? `box-shadow:inset 0 0 0 1.5px ${auto.fg}66;` : '';
+      const label   = isManual ? `${comp.label} : ${acqObj.label} (observation manuelle)`
+                    : auto     ? `${comp.label} : suggestion auto — ${auto.label} (${auto.pct.toFixed(0)}%, ${auto.info})`
+                    : `${comp.label} : non renseigné`;
       h+=`<td style="width:28px;height:30px;padding:0;${ci===0?'border-left:2px solid #a78bfa':''}">`;
       if(canEdit){
-        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:9px;font-weight:700;background:${acqObj?acqObj.bg:'transparent'};color:${acqObj?acqObj.fg:'var(--text3)'}"
+        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:9px;font-weight:700;background:${bg};color:${fg};${ring}${isAuto?'opacity:.8':''}"
           onclick="cycleManualComp('${act.id}','${st.id}','${comp.id}')"
-          title="${comp.label} : ${acqObj?acqObj.label:'Non renseigné'} (clic pour changer)"
-          >${acqObj?acqObj.id:'·'}</div>`;
+          title="${esc(label)} (clic pour ${isManual?'changer':'confirmer/modifier'})"
+          >${shown?shown.id:'·'}</div>`;
       } else {
-        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;background:${acqObj?acqObj.bg:'transparent'};color:${acqObj?acqObj.fg:'var(--text3)'}"
-          title="${comp.label} : ${acqObj?acqObj.label:''}"
-          >${acqObj?acqObj.id:''}</div>`;
+        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;background:${bg};color:${fg};${isAuto?'opacity:.8':''}"
+          title="${esc(label)}"
+          >${shown?shown.id:''}</div>`;
       }
       h+=`</td>`;
     });
@@ -1243,8 +1341,13 @@ window.cycleManualComp=function(actId,stId,compId){
   if(!act.manualComps) act.manualComps={};
   if(!act.manualComps[stId]) act.manualComps[stId]={};
   const cur = act.manualComps[stId][compId];
-  // Cycle : undefined→0(NA)→1(PA)→2(A)→3(M)→undefined
-  if(cur===undefined) act.manualComps[stId][compId]=0;
+  // Cycle : undefined→(suggestion auto si dispo, sinon NA)→…→M→undefined
+  if(cur===undefined){
+    const cl=curClass();
+    const auto = cl ? computeCompAcqActivite(act,stId,getComps(cl))[compId] : null;
+    const autoIdx = auto ? ACQ.findIndex(a=>a.id===auto.id) : -1;
+    act.manualComps[stId][compId]=autoIdx>=0?autoIdx:0;
+  }
   else if(cur>=3) delete act.manualComps[stId][compId];
   else act.manualComps[stId][compId]=cur+1;
   saveData(); render();
