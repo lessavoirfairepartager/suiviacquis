@@ -262,6 +262,39 @@ function groupesLegendHTML(cl){
       <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.couleur};flex:none"></span>${esc(g.nom)}
     </span>`).join('')}</div>`;
 }
+// Barre de filtre par groupe (légende cliquable) : filtre les tableaux/listes
+// d'élèves sur la classe/séquence courante. "Tous" annule le filtre.
+function groupesFilterHTML(cl){
+  const gs=getGroupes(cl); if(!gs.length) return '';
+  const f=nav.groupeFilter;
+  let h=`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px;align-items:center">`;
+  h+=`<span style="font-size:10px;color:var(--text3)">Filtrer :</span>`;
+  h+=`<span onclick="setGroupeFilter(null)" style="display:inline-flex;align-items:center;padding:2px 9px;border-radius:10px;cursor:pointer;font-size:10px;
+    border:1px solid ${!f?'var(--blue)':'var(--border)'};background:${!f?'var(--blue)':'var(--bg3)'};color:${!f?'#fff':'var(--text2)'};font-weight:${!f?'600':'400'}">Tous</span>`;
+  gs.forEach(g=>{
+    const on=f===g.id;
+    h+=`<span onclick="setGroupeFilter('${g.id}')" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;cursor:pointer;font-size:10px;
+      border:1px solid ${g.couleur};background:${on?g.couleur:'var(--bg3)'};color:${on?'#fff':'var(--text2)'}">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${g.couleur};flex:none"></span>${esc(g.nom)}</span>`;
+  });
+  h+=`</div>`;
+  return h;
+}
+window.setGroupeFilter=function(id){
+  nav.groupeFilter=(nav.groupeFilter===id)?null:id;
+  render();
+};
+
+// ── Élèves actifs / sortis (démission, exclusion, changement de section…) ────
+const ARCHIVE_REASONS={demission:'Démission',exclusion:'Exclusion définitive',section:'Changement de section',autre:'Autre'};
+function activeStudents(cl)   { return (cl.students||[]).filter(st=>!st.archived); }
+function archivedStudents(cl) { return (cl.students||[]).filter(st=>st.archived); }
+// Élèves actifs à afficher compte tenu du filtre de groupe en cours
+function visibleStudents(cl){
+  let sts=activeStudents(cl);
+  if(nav.groupeFilter) sts=sts.filter(st=>(st.groupeIds||[]).includes(nav.groupeFilter));
+  return sts;
+}
 
 // ── Score ────────────────────────────────────────────────────────────────────
 function computeScore(act, stId) {
@@ -488,7 +521,7 @@ function renderHome(mc) {
       const niv = cl.niveau==='3eme'?'3ème':'BAC PRO';
       h+=`<div class="card class-card" style="position:relative" onclick="goClass('${cl.id}')">
         <div class="class-card-name">${esc(cl.name)}</div>
-        <div class="class-card-sub">${niv} · ${(cl.sequences||[]).length} séq. · ${(cl.students||[]).length} élèves</div>
+        <div class="class-card-sub">${niv} · ${(cl.sequences||[]).length} séq. · ${activeStudents(cl).length} élèves</div>
         <div style="margin-top:6px;font-size:10px;color:var(--text3)">
           Code élèves : <span style="font-family:monospace;font-weight:600;color:var(--blue)">${cl.viewCode||'—'}</span>
         </div>
@@ -565,7 +598,8 @@ window.enterClassCode=async function(){
 // ── Class view ───────────────────────────────────────────────────────────────
 function renderClass(mc) {
   const cl=getClass(nav.classId); if(!cl){goHome();return;}
-  const seqs=cl.sequences||[], sts=cl.students||[];
+  const seqs=cl.sequences||[], sts=visibleStudents(cl);
+  const archived=archivedStudents(cl);
   let h=`<div class="page">`;
   // Afficher le code de la classe pour le prof
   if(D.isProfMode && cl.viewCode){
@@ -598,19 +632,38 @@ function renderClass(mc) {
     catch(e){ console.error('[renderGlobalView]',e); h+=`<div class="no-data" style="color:var(--red)">Erreur d'affichage de la vue globale — ${esc(e.message)}</div>`; }
   }
   if(D.isProfMode){
+    const activeCount=activeStudents(cl).length;
     h+=`<div class="section-hdr" style="margin-top:20px">
       <span class="section-title">Élèves</span>
-      <span class="badge">${sts.length} élève${sts.length>1?'s':''}</span>
+      <span class="badge">${sts.length} élève${sts.length>1?'s':''}${nav.groupeFilter?` / ${activeCount}`:''}</span>
       <button class="btn btn-sm" style="margin-left:auto" onclick="openModal('manageGroupes')" title="Créer et affecter des groupes">🎨 Groupes</button>
     </div>`;
-    h+=groupesLegendHTML(cl);
+    h+=groupesFilterHTML(cl);
     h+=`<div class="student-pills">`;
     sts.forEach(st=>{
       h+=`<div class="student-pill">${groupeDotsHTML(cl,st)}${esc(st.name)}`;
-      h+=`<button class="pill-del" onclick="deleteItem('student','${st.id}')" title="Supprimer">✕</button>`;
+      h+=`<button class="pill-del" onclick="openModal('archiveStudent','${st.id}')" title="Sortir cet élève (démission, exclusion, changement de section…)">📤</button>`;
       h+=`</div>`;
     });
     h+=`</div>`;
+    if(archived.length>0){
+      h+=`<div class="section-hdr" style="margin-top:14px">
+        <span class="section-title" style="color:var(--text3)">Élèves sortis</span>
+        <span class="badge">${archived.length}</span>
+      </div>`;
+      h+=`<div class="student-pills">`;
+      archived.forEach(st=>{
+        const reason=ARCHIVE_REASONS[st.archiveReason]||'Sorti';
+        const d=st.archiveDate?fmtDate(st.archiveDate):'';
+        const detail=[reason,d].filter(Boolean).join(' · ')+(st.archiveNote?` — ${esc(st.archiveNote)}`:'');
+        h+=`<div class="student-pill" style="opacity:.65" title="${esc(detail)}">${esc(st.name)}
+          <span style="font-size:9px;color:var(--text3);margin-left:4px">(${esc(reason)}${d?' · '+d:''})</span>
+          <button class="pill-del" style="color:var(--green)" onclick="restoreStudent('${st.id}')" title="Réintégrer dans la classe">↩</button>
+          <button class="pill-del" onclick="deleteItem('student','${st.id}')" title="Supprimer définitivement (perte des données)">🗑</button>
+        </div>`;
+      });
+      h+=`</div>`;
+    }
   }
   h+=`</div>`;
   mc.innerHTML=h;
@@ -618,7 +671,7 @@ function renderClass(mc) {
 
 // ── Global view ──────────────────────────────────────────────────────────────
 function renderGlobalView(cl) {
-  const sts=cl.students||[], seqs=cl.sequences||[];
+  const sts=visibleStudents(cl), seqs=cl.sequences||[];
   const comps=getComps(cl);
   let h=`<div class="section-hdr"><span class="section-title">Vue globale des notes et compétences</span></div>`;
   h+=`<div class="card" style="overflow:hidden;margin-bottom:8px">`;
@@ -756,13 +809,13 @@ window.switchGV=function(sqId){
 function renderSeq(mc) {
   const cl=curClass(),sq=curSeq();
   if(!cl){goHome();return;} if(!sq){goClass(nav.classId);return;}
-  const sts=cl.students||[],acts=sq.activities||[];
+  const sts=visibleStudents(cl),acts=sq.activities||[];
   let h='';
   h+=`<div class="seq-tabs-wrap">`;
   (cl.sequences||[]).forEach(s=>h+=`<button class="seq-tab${s.id===nav.seqId?' active':''}" onclick="goSeq('${s.id}')">${esc(s.name)}</button>`);
   if(D.isProfMode) h+=`<button class="seq-tab seq-tab-more" onclick="openModal('addSeq')" title="Nouvelle séquence">+</button>`;
   h+=`</div><div class="page">`;
-  h+=groupesLegendHTML(cl);
+  h+=groupesFilterHTML(cl);
   if(!acts.length) h+=`<div class="no-data">Aucune activité.${D.isProfMode?' Cliquez sur "+ Activité".':''}</div>`;
   else acts.forEach(act=>{
     try { h+=renderActivity(act,sts,cl,false); }
@@ -1080,7 +1133,7 @@ function openProjector() {
   acts.forEach(a=>h+=`<button class="proj-act-tab${a.id===projActId?' active':''}" onclick="switchProjAct('${a.id}')">${esc(a.name)}</button>`);
   h+=`</div><div id="proj-body">`;
   const act=acts.find(a=>a.id===projActId);
-  if(act) h+=renderActivity(act,cl.students||[],cl,true);
+  if(act) h+=renderActivity(act,visibleStudents(cl),cl,true);
   h+=`</div>`;
   ov.innerHTML=h; document.body.appendChild(ov); document.body.style.overflow='hidden';
 }
@@ -1090,7 +1143,7 @@ window.switchProjAct=function(actId){
   document.querySelectorAll('.proj-act-tab').forEach(t=>t.classList.toggle('active',t.getAttribute('onclick').includes(`'${actId}'`)));
   const body=document.getElementById('proj-body');
   const act=(sq.activities||[]).find(a=>a.id===actId);
-  if(body&&act) body.innerHTML=renderActivity(act,cl.students||[],cl,true);
+  if(body&&act) body.innerHTML=renderActivity(act,visibleStudents(cl),cl,true);
 };
 window.closeProjector=function(){
   const el=document.getElementById('projector'); if(el)el.remove();
@@ -1216,6 +1269,13 @@ window.renameItem=function(type,id,parentId){
   if(type==='seq'){const sq=getSeq(cl,id);if(sq){sq.name=name;saveData();render();toast('✓ Renommé');}}
   else if(type==='act'){const sq=curSeq();const act=getAct(sq,id);if(act){act.name=name;saveData();render();toast('✓ Renommé');}}
   else if(type==='sess'){const sq=curSeq();const act=getAct(sq,parentId);const sess=getSess(act,id);if(sess){sess.name=name;saveData();render();toast('✓ Renommé');}}
+};
+window.restoreStudent=function(id){
+  const cl=curClass(); if(!cl) return;
+  const st=(cl.students||[]).find(s=>s.id===id); if(!st) return;
+  st.archived=false;
+  delete st.archiveReason; delete st.archiveDate; delete st.archiveNote;
+  saveData(); render(); toast(`✓ ${st.name} réintégré(e)`);
 };
 window.deleteItem=function(type,id,parentId){
   const cl=curClass();
@@ -1492,6 +1552,21 @@ window.openModal=function(type,extra){
         <div id="groupes-assign"></div>
       </div>`;
     showConfirm=false;
+  } else if(type==='archiveStudent'){
+    const cl=curClass(); if(!cl) return;
+    const st=(cl.students||[]).find(s=>s.id===extra); if(!st){closeModal();return;}
+    const today=new Date().toISOString().slice(0,10);
+    html=`<div class="modal-title">📤 Sortir ${esc(st.name)}</div>
+      <div style="font-size:11px;color:var(--text3);margin-bottom:10px">L'élève quitte la liste active mais ses notes et son historique sont conservés. Vous pourrez le réintégrer à tout moment.</div>
+      <div class="form-group"><label class="form-label">Motif</label>
+        <select class="form-select" id="m-arch-reason">
+          ${Object.entries(ARCHIVE_REASONS).map(([k,v])=>`<option value="${k}">${esc(v)}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Date</label>
+        <input class="form-input" id="m-arch-date" type="date" value="${today}"></div>
+      <div class="form-group"><label class="form-label">Précision (optionnel)</label>
+        <input class="form-input" id="m-arch-note" placeholder="Ex: nom de la nouvelle section…"></div>`;
+    confirmLabel='Sortir l\'élève';
   }
 
   const ov=document.createElement('div');
@@ -1625,7 +1700,7 @@ function renderGroupesModal(){
     </div>`).join('')
     : `<div class="no-data" style="padding:8px 0;font-size:12px">Aucun groupe pour l'instant.</div>`;
 
-  const sts=cl.students||[];
+  const sts=activeStudents(cl);
   assignEl.innerHTML = !groupes.length ? ''
     : !sts.length ? `<div class="no-data" style="padding:8px 0;font-size:12px">Aucun élève dans cette classe.</div>`
     : sts.map(st=>{
@@ -1797,6 +1872,14 @@ window.doModal=function(){
     if(!act.qcmNotes) act.qcmNotes=[];
     act.qcmNotes.push({id:uid(),name:qname,max:qmax,date:qdate||null,scores:{}});
     saveData(); closeModal(); render(); toast('✓ Note ajoutée');
+  } else if(t==='archiveStudent'){
+    const cl=curClass(); if(!cl) return;
+    const st=(cl.students||[]).find(s=>s.id===mState.extra); if(!st) return;
+    st.archived=true;
+    st.archiveReason=document.getElementById('m-arch-reason').value||'autre';
+    st.archiveDate=document.getElementById('m-arch-date').value||new Date().toISOString().slice(0,10);
+    st.archiveNote=(document.getElementById('m-arch-note').value||'').trim();
+    saveData(); closeModal(); render(); toast(`✓ ${st.name} sorti(e) de la liste active`);
   }
 };
 
@@ -1999,7 +2082,7 @@ async function syncProgItemToWDS(code, act) {
 window.doExportCSV=function(clId,sqId){
   const cl=D.classes.find(c=>c.id===clId); if(!cl) return;
   const sq=(cl.sequences||[]).find(s=>s.id===sqId); if(!sq) return;
-  const sts=cl.students||[], acts=sq.activities||[];
+  const sts=activeStudents(cl), acts=sq.activities||[];
   const comps=getComps(cl);
   const rows=[['Élève',...acts.map(a=>a.name+' (/10)'),...comps.map(c=>c.short+' – '+c.label)]];
   sts.forEach(st=>{
@@ -2025,7 +2108,7 @@ window.doExportCSV=function(clId,sqId){
 window.exportLivret=function(clId, sqId){
   const cl=D.classes.find(c=>c.id===clId); if(!cl) return;
   const sq=(cl.sequences||[]).find(s=>s.id===sqId); if(!sq) return;
-  const sts=cl.students||[];
+  const sts=activeStudents(cl);
   // En-tête
   const domNames = SOCLE.map(d=>d.label);
   const acqNames = SOCLE.map(d=>d.id);
