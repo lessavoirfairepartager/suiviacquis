@@ -488,20 +488,23 @@ function starWidget(lv,actId,stId,sessId,key,canEdit,forProj) {
 // ── Render ───────────────────────────────────────────────────────────────────
 // Migration douce et idempotente des données (compat. anciennes versions).
 // Appelée à chaque render : ne modifie/sauvegarde QUE si un vrai changement a
-// eu lieu, donc quasi gratuite en régime normal.
+// eu lieu. Un jeton de version (D._migV) évite de rejouer la migration à chaque
+// render et de créer une boucle push/pull avec la synchro.
+var MIGRATION_VERSION = 2;
 function migrateData(){
   if(!D||!D.classes) return;
+  if(D._migV===MIGRATION_VERSION) return; // déjà migré : sortie immédiate, zéro coût
   let changed=false;
   D.classes.forEach(cl=>{
     // 1) niveau : ancien '3eme' → '3pm'
     if(cl.niveau==='3eme'){ cl.niveau='3pm'; changed=true; }
     if(!cl.niveau){ cl.niveau='bac_pro'; changed=true; }
-    // 2) items tagués sur un ancien code de compétence
+    // 2) items tagués sur un ancien code de compétence disparu.
+    // On ne remappe QUE les codes qui n'existent plus au niveau de la classe :
+    //  - Bac Pro / CAP : seul C6 a disparu (→ C5). C1..C5 restent valides.
+    //  - 3PM : la grille CH/MO/RE/RA/CA/CO est inchangée, rien à remapper.
     const valid=getComps(cl).map(c=>c.id);
-    // Remap des anciens codes Bac Pro (6 comp. → 5 comp.) et socle→pro
-    const remap = normNiveau(cl.niveau)==='3pm'
-      ? {C1:'CH',C2:'MO',C3:'RE',C4:'RA',C5:'CA',C6:'CO'}   // ancien tag pro sur une classe repassée 3PM
-      : {C6:'C5', CH:'C1',MO:'C2',RE:'C3',RA:'C4',CA:'C5',CO:'C5'}; // ancien tag 6-comp/socle → 5-comp pro
+    const remap = normNiveau(cl.niveau)==='3pm' ? {} : {C6:'C5'};
     (cl.sequences||[]).forEach(sq=>{
       (sq.activities||[]).forEach(act=>{
         (act.items||[]).forEach(it=>{
@@ -509,14 +512,13 @@ function migrateData(){
             it.compId=remap[it.compId]; changed=true;
           }
         });
-        // 3) observations manuelles portant un ancien code de compétence
+        // 3) observations manuelles portant un ancien code disparu
         if(act.manualComps){
           Object.keys(act.manualComps).forEach(stId=>{
             const mc=act.manualComps[stId]; if(!mc) return;
             Object.keys(mc).forEach(cid=>{
               if(valid.indexOf(cid)<0 && remap[cid]){
                 const tgt=remap[cid];
-                // si la cible existe déjà, on garde le niveau le plus élevé
                 mc[tgt]=(mc[tgt]===undefined)?mc[cid]:Math.max(mc[tgt],mc[cid]);
                 delete mc[cid]; changed=true;
               }
@@ -526,7 +528,10 @@ function migrateData(){
       });
     });
   });
-  if(changed && typeof saveData==='function') saveData();
+  // Marque les données comme migrées, qu'il y ait eu ou non un changement, pour
+  // ne plus rejouer la migration ensuite (idempotence + pas de boucle sync).
+  D._migV=MIGRATION_VERSION;
+  if(typeof saveData==='function') saveData();
 }
 
 function render() {
