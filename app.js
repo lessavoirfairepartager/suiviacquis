@@ -12,7 +12,8 @@
 
 // ── Compétences pré-définies ─────────────────────────────────────────────────
 const COMPETENCES = {
-  '3eme': [
+  // 3ᵉ Prépa-Métiers : 6 compétences du socle collège (cycle 4)
+  '3pm': [
     {id:'CH', short:'CH', label:'Chercher',      color:'#dbeafe', text:'#1e40af'},
     {id:'MO', short:'MO', label:'Modéliser',     color:'#fce7f3', text:'#9d174d'},
     {id:'RE', short:'RE', label:'Représenter',   color:'#d1fae5', text:'#065f46'},
@@ -20,14 +21,47 @@ const COMPETENCES = {
     {id:'CA', short:'CA', label:'Calculer',      color:'#ede9fe', text:'#5b21b6'},
     {id:'CO', short:'CO', label:'Communiquer',   color:'#ffedd5', text:'#9a3412'},
   ],
+  // BAC PRO : 5 compétences de la voie professionnelle
   'bac_pro': [
-    {id:'C1', short:'C1', label:"Chercher, s'informer",      color:'#dbeafe', text:'#1e40af'},
-    {id:'C2', short:'C2', label:'Modéliser',                  color:'#fce7f3', text:'#9d174d'},
-    {id:'C3', short:'C3', label:'Représenter',                color:'#d1fae5', text:'#065f46'},
-    {id:'C4', short:'C4', label:'Raisonner, argumenter',     color:'#fef3c7', text:'#92400e'},
-    {id:'C5', short:'C5', label:'Calculer, appliquer',       color:'#ede9fe', text:'#5b21b6'},
-    {id:'C6', short:'C6', label:'Communiquer',               color:'#ffedd5', text:'#9a3412'},
-  ]
+    {id:'C1', short:'C1', label:"S'approprier",       color:'#dbeafe', text:'#1e40af'},
+    {id:'C2', short:'C2', label:'Analyser / Raisonner', color:'#fce7f3', text:'#9d174d'},
+    {id:'C3', short:'C3', label:'Réaliser',           color:'#d1fae5', text:'#065f46'},
+    {id:'C4', short:'C4', label:'Valider',            color:'#fef3c7', text:'#92400e'},
+    {id:'C5', short:'C5', label:'Communiquer',        color:'#ede9fe', text:'#5b21b6'},
+  ],
+  // CAP : 5 compétences de la voie professionnelle (mêmes intitulés, attendus allégés)
+  'cap': [
+    {id:'C1', short:'C1', label:"S'approprier",       color:'#dbeafe', text:'#1e40af'},
+    {id:'C2', short:'C2', label:'Analyser / Raisonner', color:'#fce7f3', text:'#9d174d'},
+    {id:'C3', short:'C3', label:'Réaliser',           color:'#d1fae5', text:'#065f46'},
+    {id:'C4', short:'C4', label:'Valider',            color:'#fef3c7', text:'#92400e'},
+    {id:'C5', short:'C5', label:'Communiquer',        color:'#ede9fe', text:'#5b21b6'},
+  ],
+};
+// Sous-compétences détaillées (info-bulles) — reflètent les grilles officielles
+const COMP_DETAILS = {
+  '3pm': {
+    CH:['Extraire, organiser l\u2019information utile','Chercher, expérimenter, tester'],
+    MO:['Traduire une situation par un modèle','Utiliser, comprendre un modèle'],
+    RE:['Choisir, produire une représentation','Passer d\u2019un registre à un autre'],
+    RA:['Émettre une conjecture, argumenter','Mener un raisonnement logique'],
+    CA:['Calculer, appliquer une technique','Contrôler la vraisemblance d\u2019un résultat'],
+    CO:['Rendre compte à l\u2019oral ou à l\u2019écrit','Expliquer une démarche'],
+  },
+  'bac_pro': {
+    C1:['Rechercher, extraire et organiser l\u2019information','Traduire des informations, des codages'],
+    C2:['Émettre des conjectures, formuler des hypothèses','Proposer, choisir une méthode de résolution ou un protocole','Élaborer un algorithme'],
+    C3:['Mettre en \u0153uvre une méthode, un algorithme ou un protocole (règles de sécurité)','Utiliser un modèle, représenter, calculer','Expérimenter, faire une simulation'],
+    C4:['Exploiter et interpréter des résultats de façon critique et argumentée','Contrôler la vraisemblance d\u2019une conjecture, d\u2019une mesure','Valider un modèle ou une hypothèse','Mener un raisonnement logique et conclure'],
+    C5:['Rendre compte d\u2019un résultat à l\u2019oral ou à l\u2019écrit','Expliquer une démarche'],
+  },
+  'cap': {
+    C1:['Rechercher, extraire et organiser l\u2019information','Traduire des informations, des codages'],
+    C2:['Émettre des conjectures, formuler des hypothèses','Choisir une méthode de résolution ou un protocole'],
+    C3:['Mettre en \u0153uvre une méthode, un algorithme ou un protocole (règles de sécurité)','Utiliser un modèle, représenter, calculer','Expérimenter, utiliser une simulation'],
+    C4:['Commenter un résultat ou des observations de façon critique et argumentée','Contrôler la vraisemblance d\u2019une conjecture, d\u2019une mesure','Valider une hypothèse','Mener un raisonnement logique et conclure'],
+    C5:['Rendre compte d\u2019un résultat à l\u2019oral ou à l\u2019écrit','Expliquer une démarche'],
+  },
 };
 
 // ── Niveaux d'acquisition (4 niveaux) ────────────────────────────────────────
@@ -43,41 +77,56 @@ function getAcqLevel(pct) {
   if (pct >= 25) return ACQ[1];
   return ACQ[0];
 }
-function getComps(cl) { return COMPETENCES[(cl&&cl.niveau)||'bac_pro']||COMPETENCES['bac_pro']; }
+function getComps(cl) { return COMPETENCES[normNiveau(cl&&cl.niveau)]||COMPETENCES['bac_pro']; }
+function getCompDetails(cl){ return COMP_DETAILS[normNiveau(cl&&cl.niveau)]||{}; }
+// Info-bulle enrichie d'une compétence : intitulé + sous-compétences officielles
+function compTip(cl, c){
+  const det=(getCompDetails(cl)[c.id])||[];
+  return det.length ? `${c.short} — ${c.label}\n• ${det.join('\n• ')}` : `${c.short} — ${c.label}`;
+}
 
-// ── Socle commun — 5 domaines (uniquement 3ème) ─────────────────────────────
+// Normalise le code de niveau d'une classe. Gère la rétro-compatibilité :
+//  - ancien '3eme' (socle collège) → '3pm'
+//  - valeurs inconnues/absentes → 'bac_pro'
+function normNiveau(niv){
+  if(niv==='3eme'||niv==='3pm') return '3pm';
+  if(niv==='cap') return 'cap';
+  return 'bac_pro';
+}
+// Un niveau utilise-t-il le socle commun DNB (domaines D1–D5) ? Uniquement 3PM.
+function usesSocle(cl){ return normNiveau(cl&&cl.niveau)==='3pm'; }
+
+// ── Socle commun collège — 5 domaines (uniquement 3PM) ──────────────────────
+// Chaque domaine est alimenté par les compétences 3PM (CH/MO/RE/RA/CA/CO).
 const SOCLE = [
   {id:'D1', label:'D1 — Langages pour penser et communiquer',
    desc:'Expression écrite et orale, raisonnement mathématique',
-   comps3: ['CO'],           comps_bp: ['C6'],
+   comps: ['CO'],
    color:'#ffedd5', text:'#9a3412'},
   {id:'D2', label:'D2 — Méthodes et outils pour apprendre',
    desc:'Organiser son travail, utiliser des outils numériques et calculatoires',
-   comps3: ['CH','CA'],      comps_bp: ['C1','C5'],
+   comps: ['CH','CA'],
    color:'#dbeafe', text:'#1e40af'},
   {id:'D3', label:'D3 — Formation de la personne et du citoyen',
    desc:'Esprit critique, argumentation, jugement',
-   comps3: ['RA'],           comps_bp: ['C4'],
+   comps: ['RA'],
    color:'#ede9fe', text:'#5b21b6'},
   {id:'D4', label:'D4 — Systèmes naturels et systèmes techniques',
    desc:'Modélisation, représentation de phénomènes réels',
-   comps3: ['MO','RE'],      comps_bp: ['C2','C3'],
+   comps: ['MO','RE'],
    color:'#d1fae5', text:'#065f46'},
   {id:'D5', label:'D5 — Représentations du monde et activité humaine',
    desc:'Modélisation de situations du monde réel',
-   comps3: ['MO'],           comps_bp: ['C2'],
+   comps: ['MO'],
    color:'#fce7f3', text:'#9d174d'},
 ];
 
-// Calcule le niveau socle d'un élève pour une séquence donnée
-// En moyennant les % des compétences qui alimentent chaque domaine
+// Calcule le niveau socle d'un élève pour une séquence donnée (3PM uniquement)
 function computeSocleAcq(cl, sq, stId) {
   const compLvls = computeCompAcq(cl, sq, stId);
-  const isBAC    = (cl.niveau||'bac_pro') !== '3eme';
   const result   = {};
   SOCLE.forEach(dom => {
-    const compIds = isBAC ? dom.comps_bp : dom.comps3;
-    const values  = compIds.map(cid => compLvls[cid]).filter(v => v !== null && v !== undefined);
+    const values = dom.comps.map(cid => compLvls[cid]).filter(v => v !== null && v !== undefined);
     if (!values.length) { result[dom.id] = null; return; }
     const avgPct = values.reduce((a,b) => a + b.pct, 0) / values.length;
     result[dom.id] = { pct: avgPct, ...getAcqLevel(avgPct) };
@@ -87,11 +136,9 @@ function computeSocleAcq(cl, sq, stId) {
 // Bilan annuel du socle (toutes séquences confondues)
 function computeSocleAcqAnnuelle(cl, stId) {
   const compLvls = computeCompAcqAnnuelle(cl, stId);
-  const isBAC    = (cl.niveau||'bac_pro') !== '3eme';
   const result   = {};
   SOCLE.forEach(dom => {
-    const compIds = isBAC ? dom.comps_bp : dom.comps3;
-    const values  = compIds.map(cid => compLvls[cid]).filter(v => v !== null && v !== undefined);
+    const values = dom.comps.map(cid => compLvls[cid]).filter(v => v !== null && v !== undefined);
     if (!values.length) { result[dom.id] = null; return; }
     const avgPct = values.reduce((a,b) => a + b.pct, 0) / values.length;
     result[dom.id] = { pct: avgPct, ...getAcqLevel(avgPct) };
@@ -439,7 +486,51 @@ function starWidget(lv,actId,stId,sessId,key,canEdit,forProj) {
 }
 
 // ── Render ───────────────────────────────────────────────────────────────────
+// Migration douce et idempotente des données (compat. anciennes versions).
+// Appelée à chaque render : ne modifie/sauvegarde QUE si un vrai changement a
+// eu lieu, donc quasi gratuite en régime normal.
+function migrateData(){
+  if(!D||!D.classes) return;
+  let changed=false;
+  D.classes.forEach(cl=>{
+    // 1) niveau : ancien '3eme' → '3pm'
+    if(cl.niveau==='3eme'){ cl.niveau='3pm'; changed=true; }
+    if(!cl.niveau){ cl.niveau='bac_pro'; changed=true; }
+    // 2) items tagués sur un ancien code de compétence
+    const valid=getComps(cl).map(c=>c.id);
+    // Remap des anciens codes Bac Pro (6 comp. → 5 comp.) et socle→pro
+    const remap = normNiveau(cl.niveau)==='3pm'
+      ? {C1:'CH',C2:'MO',C3:'RE',C4:'RA',C5:'CA',C6:'CO'}   // ancien tag pro sur une classe repassée 3PM
+      : {C6:'C5', CH:'C1',MO:'C2',RE:'C3',RA:'C4',CA:'C5',CO:'C5'}; // ancien tag 6-comp/socle → 5-comp pro
+    (cl.sequences||[]).forEach(sq=>{
+      (sq.activities||[]).forEach(act=>{
+        (act.items||[]).forEach(it=>{
+          if(it.compId && valid.indexOf(it.compId)<0 && remap[it.compId]){
+            it.compId=remap[it.compId]; changed=true;
+          }
+        });
+        // 3) observations manuelles portant un ancien code de compétence
+        if(act.manualComps){
+          Object.keys(act.manualComps).forEach(stId=>{
+            const mc=act.manualComps[stId]; if(!mc) return;
+            Object.keys(mc).forEach(cid=>{
+              if(valid.indexOf(cid)<0 && remap[cid]){
+                const tgt=remap[cid];
+                // si la cible existe déjà, on garde le niveau le plus élevé
+                mc[tgt]=(mc[tgt]===undefined)?mc[cid]:Math.max(mc[tgt],mc[cid]);
+                delete mc[cid]; changed=true;
+              }
+            });
+          });
+        }
+      });
+    });
+  });
+  if(changed && typeof saveData==='function') saveData();
+}
+
 function render() {
+  migrateData();
   renderTopbar();
   const mc=document.getElementById('main-content');
   if(nav.screen==='home')       renderHome(mc);
@@ -556,7 +647,7 @@ function renderHome(mc) {
     const filtered = D.classes.filter(cl=>(cl.annee||curY)===nav.anneeFilter);
     h+=`<div class="card-grid">`;
     filtered.forEach(cl=>{
-      const niv = cl.niveau==='3eme'?'3ème':'BAC PRO';
+      const niv = {'3pm':'3ᵉ PM','bac_pro':'BAC PRO','cap':'CAP'}[normNiveau(cl.niveau)]||'BAC PRO';
       h+=`<div class="card class-card" style="position:relative" onclick="goClass('${cl.id}')">
         <div class="class-card-name">${esc(cl.name)}</div>
         <div class="class-card-sub">${niv} · ${(cl.sequences||[]).length} séq. · ${activeStudents(cl).length} élèves</div>
@@ -737,7 +828,7 @@ function renderGlobalView(cl) {
         </th>`;
       });
     });
-    if(hasComps) comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:42px;background:${c.color};color:${c.text}" title="${esc(c.label)}">${c.short}</th>`);
+    if(hasComps) comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:42px;background:${c.color};color:${c.text};cursor:help" title="${esc(compTip(cl,c))}">${c.short}</th>`);
     h+=`</tr></thead><tbody>`;
 
     const avgs=acts.map(act=>{
@@ -806,14 +897,13 @@ function renderGlobalView(cl) {
 
     h+=`</tbody></table></div>`;
 
-    const hasSocle=acts.some(a=>(a.items||[]).some(it=>it.compId));
+    const hasSocle=usesSocle(cl) && acts.some(a=>(a.items||[]).some(it=>it.compId));
     if(hasSocle){
-      const isBAC=(cl.niveau||'bac_pro')!=='3eme';
-      const domLabel=isBAC?'Domaines du socle (BAC PRO)':'Domaines du socle commun (DNB)';
+      const domLabel='Domaines du socle commun (DNB)';
       h+=`<div style="padding:12px 14px 0">
         <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px;display:flex;align-items:center;gap:10px">
           ${domLabel}
-          ${cl.niveau==='3eme'?`<button class="btn btn-xs" onclick="exportLivret('${cl.id}','${sq.id}')" style="font-size:10px">📋 Export Livret</button>`:''}
+          <button class="btn btn-xs" onclick="exportLivret('${cl.id}','${sq.id}')" style="font-size:10px">📋 Export Livret</button>
         </div>
         <div class="table-scroll"><table>
         <thead><tr><th class="th-student">Élève</th>`;
@@ -845,13 +935,13 @@ function renderAnnualCompTable(cl) {
   const comps=getComps(cl);
   const hasComps=(cl.sequences||[]).some(sq=>(sq.activities||[]).some(a=>(a.items||[]).some(it=>it.compId)));
   if(!hasComps||!sts.length) return '';
-  const isBAC=(cl.niveau||'bac_pro')!=='3eme';
+  const showSocle=usesSocle(cl);
   let h=`<div class="section-hdr" style="margin-top:14px">
     <span class="section-title">Bilan annuel des compétences</span>
     <span style="font-size:10px;color:var(--text3);margin-left:8px">3 derniers items par compétence, toutes séquences confondues</span>
   </div>`;
   h+=`<div class="card" style="overflow:hidden;margin-bottom:8px"><div class="table-scroll"><table><thead><tr><th class="th-student">Élève</th>`;
-  comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:42px;background:${c.color};color:${c.text}" title="${esc(c.label)}">${c.short}</th>`);
+  comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:42px;background:${c.color};color:${c.text};cursor:help" title="${esc(compTip(cl,c))}">${c.short}</th>`);
   h+=`</tr></thead><tbody>`;
   sts.forEach(st=>{
     const lvls=computeCompAcqAnnuelle(cl,st.id);
@@ -864,7 +954,7 @@ function renderAnnualCompTable(cl) {
     h+=`</tr>`;
   });
   h+=`</tbody></table></div></div>`;
-  if(!isBAC){
+  if(showSocle){
     h+=`<div style="padding:0 0 8px"><div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px">Domaines du socle commun (DNB) — bilan annuel</div>
       <div class="card" style="overflow:hidden"><div class="table-scroll"><table><thead><tr><th class="th-student">Élève</th>`;
     SOCLE.forEach(dom=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:48px;background:${dom.color};color:${dom.text}" title="${esc(dom.desc)}">${dom.id}</th>`);
@@ -1079,7 +1169,7 @@ function renderActTable(act,sts,cl,forProj) {
       onclick="addItemInline('${act.id}')" title="Ajouter un item">+</div></th>`;
   // Sous-colonnes compétences
   comps.forEach((comp,ci)=>{
-    h+=`<th class="th-item" style="font-size:9px;padding:2px 3px;${ci===0?'border-left:2px solid #a78bfa':''};background:${comp.color};color:${comp.text}" title="${esc(comp.label)}">${comp.short}</th>`;
+    h+=`<th class="th-item" style="font-size:9px;padding:2px 3px;${ci===0?'border-left:2px solid #a78bfa':''};background:${comp.color};color:${comp.text};cursor:help" title="${esc(compTip(cl,comp))}">${comp.short}</th>`;
   });
   h+=`</tr></thead><tbody>`;
 
@@ -1505,8 +1595,9 @@ window.openModal=function(type,extra){
         <select class="form-select" id="m-annee" data-prev="${_cySel}" onchange="handleAnneeSelect(this)">${_yearOpts}</select></div>
       <div class="form-group"><label class="form-label">Niveau</label>
         <select class="form-select" id="m-niv" onchange="toggleSpeWrap(this.value)">
-          <option value="3eme">3ème (Cycle 4 — collège)</option>
+          <option value="3pm">3ᵉ Prépa-Métiers (socle collège)</option>
           <option value="bac_pro" selected>BAC PRO (lycée professionnel)</option>
+          <option value="cap">CAP (lycée professionnel)</option>
         </select></div>
       <div class=\"form-group\" id=\"m-spe-wrap\" style=\"display:none\">
         <label class=\"form-label\">Spécialité(s) Bac Pro <span style=\"font-size:10px;color:var(--text3)\">(1 à 3)</span></label>
@@ -1529,8 +1620,9 @@ window.openModal=function(type,extra){
         <select class="form-select" id="m-annee" data-prev="${_clAnnee}" onchange="handleAnneeSelect(this)">${_yearOpts2}</select></div>
       <div class="form-group"><label class="form-label">Niveau</label>
         <select class="form-select" id="m-niv" onchange="toggleSpeWrap(this.value)">
-          <option value="3eme"${clE.niveau==='3eme'?' selected':''}>3ème (Cycle 4 — collège)</option>
-          <option value="bac_pro"${clE.niveau!=='3eme'?' selected':''}>BAC PRO (lycée professionnel)</option>
+          <option value="3pm"${normNiveau(clE.niveau)==='3pm'?' selected':''}>3ᵉ Prépa-Métiers (socle collège)</option>
+          <option value="bac_pro"${normNiveau(clE.niveau)==='bac_pro'?' selected':''}>BAC PRO (lycée professionnel)</option>
+          <option value="cap"${normNiveau(clE.niveau)==='cap'?' selected':''}>CAP (lycée professionnel)</option>
         </select></div>
       <div class=\"form-group\" id=\"m-spe-wrap\" style=\"display:none\">
         <label class=\"form-label\">Spécialité(s) Bac Pro <span style=\"font-size:10px;color:var(--text3)\">(1 à 3)</span></label>
@@ -1541,7 +1633,7 @@ window.openModal=function(type,extra){
         <div class=\"form-hint\">Les groupements maths et PC sont déduits automatiquement.</div>
       </div>`;
     setTimeout(()=>{
-      toggleSpeWrap(clE.niveau!=='3eme'?'bac_pro':'3eme');
+      toggleSpeWrap(normNiveau(clE.niveau));
       (clE.specialites||[]).forEach(s=>addSpecialite(s));
     },50);
   } else if(type==='transferClass'){
@@ -1600,9 +1692,10 @@ window.openModal=function(type,extra){
     const sqName=(sq2?sq2.name:'').toLowerCase();
     const autoMat=sqName.includes('phys')||sqName.includes('chim')||sqName.includes('pc')?'PhCh':'M';
     const mat2=(window._progMatOverride&&window._progMatOverride[extra])||autoMat;
-    const niveauMap={bac_pro:'bac','cap':'cap','3eme':'3pm'};
-    const pageHint=niveauMap[niv]||'bac';
-    const yearHint=niv==='bac_pro'?'2PRO':niv==='cap'?'CAP':'3PM';
+    const niveauMap={bac_pro:'bac','cap':'cap','3pm':'3pm'};
+    const nNiv=normNiveau(niv);
+    const pageHint=niveauMap[nNiv]||'bac';
+    const yearHint=nNiv==='bac_pro'?'2PRO':nNiv==='cap'?'CAP':'3PM';
     const params=new URLSearchParams({mode:'picker',actId:extra,page:pageHint,year:yearHint,subj:mat2,codes:existCodes.join(',')});
     const url='grille_items.html?'+params.toString();
     // Open picker popup
@@ -1623,7 +1716,7 @@ window.openModal=function(type,extra){
         <input class="form-input" id="m-qdate" type="date" value="${new Date().toISOString().slice(0,10)}"></div>`;
   } else if(type==='exportCSV'){
     const cl=curClass();
-    const is3eme = cl && cl.niveau==='3eme';
+    const is3eme = usesSocle(cl);
     html=`<div class="modal-title">Exporter</div>`;
     if(cl){
       html+=`<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">📊 Notes et compétences (CSV)</div>`;
@@ -2232,7 +2325,7 @@ window.exportLivret=function(clId, sqId){
   rows.push(['M','Maîtrisé','75-100%']);
   rows.push([]);
   rows.push(['CORRESPONDANCES COMPÉTENCES → DOMAINES (3ème)']);
-  SOCLE.forEach(dom=>rows.push([dom.id, dom.label, 'Compétences : '+dom.comps3.join(', '), dom.desc]));
+  SOCLE.forEach(dom=>rows.push([dom.id, dom.label, 'Compétences : '+dom.comps.join(', '), dom.desc]));
 
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
