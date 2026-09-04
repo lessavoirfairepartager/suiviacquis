@@ -267,6 +267,15 @@ function displayName(fullName, forProj) {
   if(prenoms.length>0) return esc(prenoms.join(' '));
   return esc(parts[parts.length-1]); // fallback
 }
+// Trie une liste d'élèves par nom, insensible à la casse et aux accents.
+// Renvoie une NOUVELLE liste (n'altère pas l'original) ; utilisé à l'affichage
+// et à l'ajout pour garder la classe classée alphabétiquement.
+function sortStudents(list){
+  return (list||[]).slice().sort((a,b)=>
+    (a.name||'').localeCompare(b.name||'', 'fr', {sensitivity:'base', numeric:true})
+  );
+}
+
 function fmtDate(iso) {
   if(!iso) return '';
   const d=new Date(iso+'T00:00:00');
@@ -348,8 +357,8 @@ window.setGroupeFilter=function(id){
 
 // ── Élèves actifs / sortis (démission, exclusion, changement de section…) ────
 const ARCHIVE_REASONS={demission:'Démission',exclusion:'Exclusion définitive',section:'Changement de section',autre:'Autre'};
-function activeStudents(cl)   { return (cl.students||[]).filter(st=>!st.archived); }
-function archivedStudents(cl) { return (cl.students||[]).filter(st=>st.archived); }
+function activeStudents(cl)   { return sortStudents((cl.students||[]).filter(st=>!st.archived)); }
+function archivedStudents(cl) { return sortStudents((cl.students||[]).filter(st=>st.archived)); }
 // Élèves actifs à afficher compte tenu du filtre de groupe en cours
 function visibleStudents(cl){
   let sts=activeStudents(cl);
@@ -490,7 +499,7 @@ function starWidget(lv,actId,stId,sessId,key,canEdit,forProj) {
 // Appelée à chaque render : ne modifie/sauvegarde QUE si un vrai changement a
 // eu lieu. Un jeton de version (D._migV) évite de rejouer la migration à chaque
 // render et de créer une boucle push/pull avec la synchro.
-var MIGRATION_VERSION = 2;
+var MIGRATION_VERSION = 3;
 function migrateData(){
   if(!D||!D.classes) return;
   if(D._migV===MIGRATION_VERSION) return; // déjà migré : sortie immédiate, zéro coût
@@ -499,6 +508,12 @@ function migrateData(){
     // 1) niveau : ancien '3eme' → '3pm'
     if(cl.niveau==='3eme'){ cl.niveau='3pm'; changed=true; }
     if(!cl.niveau){ cl.niveau='bac_pro'; changed=true; }
+    // 1bis) tri alphabétique des élèves des classes déjà existantes
+    if(cl.students && cl.students.length>1){
+      const before=cl.students.map(s=>s.id).join(',');
+      cl.students=sortStudents(cl.students);
+      if(cl.students.map(s=>s.id).join(',')!==before) changed=true;
+    }
     // 2) items tagués sur un ancien code de compétence disparu.
     // On ne remappe QUE les codes qui n'existent plus au niveau de la classe :
     //  - Bac Pro / CAP : seul C6 a disparu (→ C5). C1..C5 restent valides.
@@ -2041,6 +2056,7 @@ window.doModal=function(){
     const cl=curClass(); if(!cl) return;
     if(!cl.students) cl.students=[];
     names.forEach(n=>cl.students.push({id:uid(),name:n}));
+    cl.students=sortStudents(cl.students);
     saveData();closeModal();render();toast(`✓ ${names.length} élève(s) ajouté(s)`);
   } else if(t==='addActivity'){
     const name=document.getElementById('m-name').value.trim(); if(!name) return;
