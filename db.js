@@ -287,6 +287,7 @@ async function syncFromSupabase() {
 }
 
 // ── Push vers Supabase ────────────────────────────────────────────────────────
+let _pushRetryTimer = null; // BUG 9 FIX : ré-essai auto après un échec réseau
 async function pushToSupabase() {
   if (!_sb || !_currentUser) return;
   try {
@@ -298,28 +299,57 @@ async function pushToSupabase() {
       updated_at: new Date().toISOString()
     }, { onConflict: 'user_id' });
     if (error) throw error;
+    if (_pushRetryTimer) { clearTimeout(_pushRetryTimer); _pushRetryTimer = null; }
     setSyncState('synced');
   } catch(e) {
     console.warn('[DB] Push failed:', e.message);
     setSyncState('error');
+    // ── BUG 9 FIX : un échec réseau ne doit pas laisser la saisie non poussée ──
+    // jusqu'au prochain clic. On réessaie une fois après 3s. Les données sont
+    // déjà en localStorage, donc rien n'est perdu localement en attendant.
+    if (!_pushRetryTimer) {
+      _pushRetryTimer = setTimeout(() => {
+        _pushRetryTimer = null;
+        if (_sb && _currentUser) pushToSupabase();
+      }, 3000);
+    }
   }
 }
 
 // ── Sauvegarde ────────────────────────────────────────────────────────────────
+let _maxSaveTimer = null; // BUG 8 FIX : flush "au plus tard" pendant une saisie en rafale
 function saveData() {
   _lastLocalActivity = Date.now(); // BUG 6 FIX : marque une activité locale récente
-  D._ts = D._ts || Date.now();
+  // ── BUG 8 FIX (cases qui disparaissent) ────────────────────────────────────
+  // CRUCIAL : chaque modification DOIT faire avancer l'horodatage local, sinon
+  // la version modifiée garde le même _ts que la version distante et peut être
+  // considérée comme "plus ancienne" par la comparaison remoteTs > D._ts, ce
+  // qui écrase la saisie. L'ancien "D._ts = D._ts || Date.now()" ne le faisait
+  // qu'à la toute première sauvegarde.
+  D._ts = Date.now();
   const toLocal = { ...D, isProfMode: false };
   localStorage.setItem(STORE_KEY, JSON.stringify(toLocal));
   if (_sb && _currentUser) {
     setSyncState('syncing');
     clearTimeout(_saveTimer);
-    // ── BUG 1 FIX : debounce réduit de 1500ms à 400ms ──────────────────────
-    // Moins de fenêtre temporelle pour perdre des données si l'onglet se ferme
+    // Debounce court : on pousse 400ms après le dernier clic.
     _saveTimer = setTimeout(() => {
       _saveTimer = null;
+      clearTimeout(_maxSaveTimer); _maxSaveTimer = null;
       pushToSupabase();
     }, 400);
+    // ── BUG 8 FIX : flush "au plus tard" toutes les 2s ─────────────────────
+    // Sans ça, une saisie en rafale (une case toutes les <400ms) repousse le
+    // debounce indéfiniment : le push ne part JAMAIS, le rond reste bleu, et la
+    // fenêtre de perte de données reste ouverte tout ce temps. Ce timer force un
+    // envoi même si l'utilisateur continue de cliquer.
+    if (!_maxSaveTimer) {
+      _maxSaveTimer = setTimeout(() => {
+        _maxSaveTimer = null;
+        clearTimeout(_saveTimer); _saveTimer = null;
+        pushToSupabase();
+      }, 2000);
+    }
   }
 }
 
@@ -434,18 +464,27 @@ window.importBackupJSON = function() {
 
 // ── Indicateur sync ───────────────────────────────────────────────────────────
 let syncState = 'local';
+const SYNC_STATES = {
+  local:        { dot:'⚪', tip:'Mode local',                             cls:'sync-local'   },
+  syncing:      { dot:'🔵', tip:'Synchronisation...',                     cls:'sync-syncing' },
+  synced:       { dot:'🟢', tip:'Synchronisé avec Supabase',              cls:'sync-ok'      },
+  error:        { dot:'🔴', tip:'Erreur Supabase',                        cls:'sync-err'     },
+  disconnected: { dot:'🔴', tip:'Session perdue — reconnexion nécessaire', cls:'sync-err'     },
+};
+// BUG 10 FIX (clignotement bleu↔blanc) : render() recréait l'indicateur figé en
+// ⚪ à chaque frame, provoquant un flash blanc avant que setSyncState le repeigne.
+// render() appelle maintenant syncIndicatorHTML() pour l'insérer DÉJÀ dans le bon
+// état.
+function syncIndicatorHTML() {
+  const s = SYNC_STATES[_syncState] || SYNC_STATES.local;
+  return `<span id="sync-indicator" class="sync-dot ${s.cls}" title="${s.tip}">${s.dot}</span>`;
+}
+window.syncIndicatorHTML = syncIndicatorHTML;
 function setSyncState(state) {
   syncState = state; _syncState = state;
   const el = document.getElementById('sync-indicator');
   if (!el) return;
-  const states = {
-    local:        { dot:'⚪', tip:'Mode local',                             cls:'sync-local'   },
-    syncing:      { dot:'🔵', tip:'Synchronisation...',                     cls:'sync-syncing' },
-    synced:       { dot:'🟢', tip:'Synchronisé avec Supabase',              cls:'sync-ok'      },
-    error:        { dot:'🔴', tip:'Erreur Supabase',                        cls:'sync-err'     },
-    disconnected: { dot:'🔴', tip:'Session perdue — reconnexion nécessaire', cls:'sync-err'     },
-  };
-  const s = states[state] || states.local;
+  const s = SYNC_STATES[state] || SYNC_STATES.local;
   el.textContent = s.dot; el.title = s.tip; el.className = 'sync-dot ' + s.cls;
 }
 

@@ -638,7 +638,9 @@ function renderTopbar() {
     if(nav.screen==='seq') rh+=`<button class="btn btn-sm btn-icon" title="Vidéoprojecteur" onclick="openProjector()">⊞</button>`;
     // PAS de bouton "Mode prof" visible — activation par triple-clic logo ou Ctrl+Shift+P
   }
-  rh += `<span id="sync-indicator" class="sync-dot sync-local" title="Mode local">⚪</span>`;
+  rh += (typeof syncIndicatorHTML==='function')
+        ? syncIndicatorHTML()
+        : `<span id="sync-indicator" class="sync-dot sync-local" title="Mode local">⚪</span>`;
   tr.innerHTML=rh;
   setSyncState(_syncState||'local');
 }
