@@ -1584,10 +1584,12 @@ window.openModal=function(type,extra){
   } else if(type==='settings'){
     const syncInfo = {
       local:        '⚪ Mode local (Supabase non configuré)',
-      syncing:      '🔵 Synchronisation en cours...',
-      synced:       '🟢 Synchronisé avec Supabase',
+      syncing:      '🔵 Envoi en cours...',
+      synced:       '🟢 Tout est enregistré en ligne',
+      pending:      '🟠 Saisies enregistrées sur cet appareil — envoi automatique dès que le réseau le permet',
+      offline:      '🟡 Réseau indisponible — rien en attente',
       error:        '🔴 Erreur — vérifiez config.js',
-      disconnected: '🔴 Session perdue — touchez "Forcer la synchronisation" pour vous reconnecter',
+      disconnected: '🔴 Session perdue — vos saisies sont gardées sur cet appareil. Touchez "Forcer la synchronisation" pour vous reconnecter',
     }[_syncState||'local'] || '⚪ Mode local';
     html=`<div class="modal-title">Paramètres & Synchronisation</div>
       <div class="form-group">
