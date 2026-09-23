@@ -485,13 +485,38 @@ function computeCompAcqActivite(act, stId, comps) {
 }
 
 // ── Stars ────────────────────────────────────────────────────────────────────
-const S_LABELS=['·','★★★★','★★★☆','★★☆☆','★☆☆☆'];
 const S_TIPS  =['Non renseigné','Excellent','Bien','Moyen','Insuffisant'];
+// Les quatre etoiles sont disposees en carre 2x2 : deux fois moins large qu'une
+// rangee de quatre, donc une colonne T ou A nettement plus etroite.
+function starSquare(l){
+  if(!l) return '<span class="star-none">·</span>';
+  const pleines=5-l;                       // niveau 1 = quatre etoiles pleines
+  let s='<span class="star-grid">';
+  for(let k=0;k<4;k++) s+=`<i>${k<pleines?'★':'☆'}</i>`;
+  return s+'</span>';
+}
 function starWidget(lv,actId,stId,sessId,key,canEdit,forProj) {
   const l=(lv===undefined||lv===null)?0:lv;
   const cls=`star-${l}${(!canEdit||forProj)?' star-readonly':''}`;
   const oc=(canEdit&&!forProj)?`onclick="cycleStar('${actId}','${stId}','${sessId}_${key}')" `:'';
-  return `<div class="star-widget ${cls}" ${oc}title="${S_TIPS[l]}">${S_LABELS[l]}</div>`;
+  return `<div class="star-widget ${cls}" ${oc}title="${S_TIPS[l]}">${starSquare(l)}</div>`;
+}
+
+// ── Materiel (3 niveaux) et infirmerie (case a cocher) ───────────────────────
+// Stockes dans sd.tae comme le reste : "<sessId>_m" (0 a 3) et "<sessId>_i"
+// (booleen). Champs nouveaux : une donnee absente vaut simplement "non
+// renseigne", donc rien a migrer.
+const M_TIPS=['Matériel : non renseigné','Matériel complet','Matériel incomplet','Matériel oublié'];
+function matWidget(lv,actId,stId,sessId,canEdit,forProj){
+  const l=(lv===undefined||lv===null)?0:lv;
+  const cls=`mat-${l}${(!canEdit||forProj)?' star-readonly':''}`;
+  const oc=(canEdit&&!forProj)?`onclick="cycleMat('${actId}','${stId}','${sessId}_m')" `:'';
+  return `<div class="star-widget ${cls}" ${oc}title="${M_TIPS[l]}">${l?'●':'·'}</div>`;
+}
+function infWidget(on,actId,stId,sessId,canEdit,forProj){
+  const cls=`${on?'inf-on':'mat-0'}${(!canEdit||forProj)?' star-readonly':''}`;
+  const oc=(canEdit&&!forProj)?`onclick="toggleTAE('${actId}','${stId}','${sessId}_i')" `:'';
+  return `<div class="star-widget ${cls}" ${oc}title="${on?'Passage à l\u2019infirmerie':'Pas de passage à l\u2019infirmerie'}">${on?'✚':'·'}</div>`;
 }
 
 // ── Render ───────────────────────────────────────────────────────────────────
@@ -1151,7 +1176,7 @@ function renderActivity(act,sts,cl,forProj) {
   return h;
 }
 
-// ── Activity table : Élève(n) | S1(P T A E) | S2... | items... | Note ───────
+// ── Activity table : Élève(n) | S1(P T A E M I) | S2... | items... | Note ──────
 function renderActTable(act,sts,cl,forProj) {
   const sessions=act.sessions||[], items=act.items||[];
   const canEdit=D.isProfMode&&!act.locked&&!forProj;
@@ -1168,7 +1193,7 @@ function renderActTable(act,sts,cl,forProj) {
   h+=`<th class="th-student" rowspan="2">Élève<br><span style="font-weight:400;font-size:10px;color:var(--text3)">(${sts.length})</span></th>`;
   sessions.forEach((sess,si)=>{
     const bl=si>0?'border-left:2px solid #93c5fd':'';
-    h+=`<th colspan="4" style="${bl}">`;
+    h+=`<th colspan="6" style="${bl}">`;
     h+=esc(sess.name||'S'+(si+1));
     if(sess.date) h+=`<br><span style="font-weight:400;font-size:9px">${fmtDate(sess.date)}</span>`;
     if(canEdit) h+=` <button class="btn btn-xs btn-icon" style="padding:0 3px;font-size:10px;vertical-align:middle"
@@ -1197,6 +1222,7 @@ function renderActTable(act,sts,cl,forProj) {
     const bl=si>0?'border-left:2px solid #93c5fd':'';
     h+=`<th style="${bl}" title="Présents/${sts.length}">${np}</th>`;
     h+=`<th title="Travail">T</th><th title="Attitude">A</th><th title="Exclusion">E</th>`;
+    h+=`<th title="Matériel : vert complet, jaune incomplet, rouge oublié">M</th><th title="Passage à l\u2019infirmerie">I</th>`;
   });
   items.forEach((item,ii)=>{
     const bl=ii===0?'border-left:2px solid #6ee7b7':'';
@@ -1250,6 +1276,8 @@ function renderActTable(act,sts,cl,forProj) {
       if(canEdit) h+=`<div class="star-widget ${eOn?'star-4':''}" onclick="toggleTAE('${act.id}','${st.id}','${eKey}')" title="${eOn?'Exclu':'Pas exclu'}">${eOn?'E':'·'}</div>`;
       else        h+=`<div class="star-widget star-readonly ${eOn?'star-4':''}" style="cursor:default">${eOn?'E':''}</div>`;
       h+=`</td>`;
+      h+=`<td class="td-mat">${matWidget(tae[`${sess.id}_m`],act.id,st.id,sess.id,canEdit,forProj)}</td>`;
+      h+=`<td class="td-mat">${infWidget(!!tae[`${sess.id}_i`],act.id,st.id,sess.id,canEdit,forProj)}</td>`;
     });
 
     const itemBg=allAbsent?'background:var(--red-bg)':'';
@@ -1342,9 +1370,10 @@ function renderActTable(act,sts,cl,forProj) {
   const classAvg=classVals.length?classVals.reduce((a,b)=>a+b,0)/classVals.length:null;
   h+=`<tr style="border-top:2px solid var(--border2);background:var(--bg3)">`;
   h+=`<td class="td-student" style="font-weight:600;font-style:italic;color:var(--text2)">Moy. classe</td>`;
-  sessions.forEach(()=>h+=`<td colspan="4"></td>`);
+  sessions.forEach(()=>h+=`<td colspan="6"></td>`);
   items.forEach(()=>h+=`<td></td>`);
   if(canEdit) h+=`<td></td>`;
+  comps.forEach(()=>h+=`<td></td>`);   // sinon la moyenne se decale sous les colonnes de competences
   if(classAvg!==null){
     h+=`<td class="td-score ${scoreCls(classAvg)}" style="font-weight:700">${classAvg.toFixed(1)}</td>`;
     h+=`<td class="td-score score-na" style="font-size:9px">—</td>`;
@@ -1413,6 +1442,14 @@ window.cycleStar=function(actId,stId,taeKey){
   const act=getAct(sq,actId); if(!act||act.locked) return;
   const sd=getSD(act,stId);
   sd.tae[taeKey]=((sd.tae[taeKey]||0)+1)%5;
+  saveData(); render();
+};
+window.cycleMat=function(actId,stId,taeKey){
+  if(!D.isProfMode) return;
+  const sq=curSeq(); if(!sq) return;
+  const act=getAct(sq,actId); if(!act||act.locked) return;
+  const sd=getSD(act,stId);
+  sd.tae[taeKey]=((sd.tae[taeKey]||0)+1)%4;   // non renseigne -> vert -> jaune -> rouge
   saveData(); render();
 };
 window.toggleTAE=function(actId,stId,taeKey){

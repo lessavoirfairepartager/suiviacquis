@@ -123,7 +123,7 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 
 /* STAR RATING for T and A */
 /* level 0=unset, 1=★★★★ excellent, 2=★★★☆ bien, 3=★★☆☆ moyen, 4=★☆☆☆ insuffisant */
-.td-star { width:34px; height:30px; padding:0; }
+.td-star { width:22px; height:30px; padding:0; }
 .star-widget {
   width:100%; height:100%; display:flex; align-items:center; justify-content:center;
   cursor:pointer; font-size:9px; letter-spacing:-2px; user-select:none;
@@ -137,6 +137,18 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 .star-4 { color:var(--red); background:var(--red-bg); }
 .star-readonly { cursor:default; }
 .star-readonly:hover { background:inherit; }
+/* Quatre etoiles en carre 2x2 : la colonne T ou A passe de 34 a 22 px. */
+.star-grid { display:grid; grid-template-columns:1fr 1fr; line-height:1; letter-spacing:0; font-size:7px; }
+.star-grid i { font-style:normal; line-height:1; }
+.star-none { font-size:10px; letter-spacing:0; }
+
+/* Materiel (3 niveaux) et infirmerie (coche) */
+.td-mat { width:20px; height:30px; padding:0; }
+.mat-0 { color:var(--text3); font-size:10px; }
+.mat-1 { color:#15803d; background:#f0fdf4; }
+.mat-2 { color:var(--amber); background:var(--amber-bg); }
+.mat-3 { color:var(--red); background:var(--red-bg); }
+.inf-on { color:var(--blue-t); background:var(--blue-bg); font-weight:700; }
 
 /* Presence cell */
 .td-pres { width:22px; height:30px; padding:0; }
@@ -230,6 +242,13 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 .projector-content .pres-exclu   { background:#2d1d00 !important; }
 /* Stars T/A */
 .projector-content .td-star { height:36px; }
+.projector-content .td-mat { height:36px; }
+.projector-content .star-grid { font-size:8px; }
+.projector-content .mat-0 { color:#484f58; }
+.projector-content .mat-1 { background:#0d3520; color:#56d364; }
+.projector-content .mat-2 { background:#3d2d00; color:#e3b341; }
+.projector-content .mat-3 { background:#3d0000; color:#ff7b72; }
+.projector-content .inf-on { background:#0d2847; color:#79c0ff; }
 .projector-content .star-widget { font-size:10px; letter-spacing:-1px; cursor:default; }
 .projector-content .star-readonly:hover { background:inherit; }
 .projector-content .star-0 { color:#484f58; }
