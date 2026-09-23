@@ -557,7 +557,31 @@ function render() {
   else if(nav.screen==='class') renderClass(mc);
   else if(nav.screen==='seq')   renderSeq(mc);
   updateFab();
+  stickyHeads();
 }
+
+// ── En-tetes de tableau figes ────────────────────────────────────────────────
+// Chaque ligne de thead est collee sous la precedente : son "top" vaut la somme
+// des hauteurs des lignes au-dessus. Recalcule apres chaque rendu, car ces
+// hauteurs dependent des libelles (noms de seances, items sur plusieurs lignes).
+// Le -1 compense la bordure partagee (border-collapse) : sans lui, un liseré de
+// contenu defile entre deux lignes d'en-tete.
+function stickyHeads(root){
+  const scope=root||document;
+  scope.querySelectorAll('.table-scroll table thead').forEach(thead=>{
+    let top=0;
+    Array.prototype.forEach.call(thead.rows,row=>{
+      Array.prototype.forEach.call(row.cells,cell=>{ cell.style.top=top+'px'; });
+      const hRow=row.getBoundingClientRect().height;
+      if(hRow) top+=Math.round(hRow)-1;
+    });
+  });
+}
+let _stickyTimer=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(_stickyTimer);
+  _stickyTimer=setTimeout(()=>stickyHeads(),150);
+});
 
 // Activation mode prof :
 //   Desktop  : triple-clic sur logo  OU  Ctrl+Shift+P
@@ -1178,12 +1202,16 @@ function renderActTable(act,sts,cl,forProj) {
     const bl=ii===0?'border-left:2px solid #6ee7b7':'';
     // Badge compétence sur l'item
     const comp=item.compId?comps.find(c=>c.id===item.compId):null;
-    h+=`<th class="th-item" style="${bl}" title="${esc(item.label)}">`;
+    // Glisser-deposer (souris) ; les fleches font la meme chose au doigt.
+    const drag=canEdit?` draggable="true" ondragstart="itemDragStart(event,'${item.id}')" ondragover="itemDragOver(event,'${item.id}')" ondragleave="itemDragLeave(event,'${item.id}')" ondrop="itemDrop(event,'${act.id}','${item.id}')" ondragend="itemDragEnd(event)"`:'';
+    h+=`<th class="th-item${canEdit?' item-drag':''}" id="ith-${item.id}" style="${bl}" title="${esc(item.label)}${canEdit?' — glisser pour deplacer':''}"${drag}>`;
     h+=esc(item.label);
     if(comp) h+=`<br><span style="font-size:8px;background:${comp.color};color:${comp.text};border-radius:3px;padding:0 3px;cursor:${canEdit?'pointer':'default'}"
         ${canEdit?`onclick="cycleItemComp('${act.id}','${item.id}')"`:''}>${comp.short}</span>`;
     else if(canEdit) h+=`<br><span style="font-size:8px;color:var(--text3);cursor:pointer" onclick="cycleItemComp('${act.id}','${item.id}')" title="Assigner une compétence">+comp</span>`;
-    if(canEdit) h+=`<br><span style="cursor:pointer;color:var(--red);font-size:8px" onclick="deleteItem('item','${item.id}','${act.id}')" title="Supprimer">✕</span>`;
+    if(canEdit) h+=`<br><span class="item-move" onclick="moveItem('${act.id}','${item.id}',-1)" title="Déplacer vers la gauche">◀</span>` +
+      `<span style="cursor:pointer;color:var(--red);font-size:8px" onclick="deleteItem('item','${item.id}','${act.id}')" title="Supprimer">✕</span>` +
+      `<span class="item-move" onclick="moveItem('${act.id}','${item.id}',1)" title="Déplacer vers la droite">▶</span>`;
     h+=`</th>`;
   });
   if(canEdit) h+=`<th class="th-item" style="min-width:20px;padding:0;border-left:${items.length===0?'2px solid #6ee7b7':'none'}">
@@ -1346,6 +1374,7 @@ function openProjector() {
   if(act) h+=renderActivity(act,visibleStudents(cl),cl,true);
   h+=`</div>`;
   ov.innerHTML=h; document.body.appendChild(ov); document.body.style.overflow='hidden';
+  stickyHeads(ov);
 }
 window.switchProjAct=function(actId){
   projActId=actId;
@@ -1354,6 +1383,7 @@ window.switchProjAct=function(actId){
   const body=document.getElementById('proj-body');
   const act=(sq.activities||[]).find(a=>a.id===actId);
   if(body&&act) body.innerHTML=renderActivity(act,visibleStudents(cl),cl,true);
+  stickyHeads(document.getElementById('projector'));
 };
 window.closeProjector=function(){
   const el=document.getElementById('projector'); if(el)el.remove();
@@ -1475,6 +1505,58 @@ window.addItemInline=function(actId){
   if(!label||!label.trim()) return;
   act.items.push({id:uid(),label:label.trim(),compId:null});
   saveData(); render(); toast('✓ Item ajouté');
+};
+
+// ── Ordre des items : glisser-deposer + fleches ──────────────────────────────
+// L'ordre d'affichage est simplement l'ordre du tableau act.items. Les cases
+// cochees sont rangees par identifiant (checks[item.id]), donc reordonner ne
+// touche aucune saisie. La fusion de db.js reconstruit les tableaux "ordre
+// local d'abord" : le nouvel ordre part bien vers le serveur sans etre ecrase.
+let _dragItemId=null;
+function clearDragMarks(){
+  document.querySelectorAll('.th-item.drop-target').forEach(el=>el.classList.remove('drop-target'));
+  document.querySelectorAll('.th-item.drag-src').forEach(el=>el.classList.remove('drag-src'));
+}
+function editableAct(actId){
+  if(!D.isProfMode) return null;
+  const sq=curSeq(); if(!sq) return null;
+  const act=getAct(sq,actId);
+  if(!act||act.locked) return null;
+  if(!act.items) act.items=[];
+  return act;
+}
+window.itemDragStart=function(ev,itemId){
+  _dragItemId=itemId;
+  try{ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain',itemId); }catch(e){}
+  const th=document.getElementById('ith-'+itemId); if(th) th.classList.add('drag-src');
+};
+window.itemDragOver=function(ev,itemId){
+  if(!_dragItemId||_dragItemId===itemId) return;
+  ev.preventDefault();
+  try{ ev.dataTransfer.dropEffect='move'; }catch(e){}
+  const th=document.getElementById('ith-'+itemId); if(th) th.classList.add('drop-target');
+};
+window.itemDragLeave=function(ev,itemId){
+  const th=document.getElementById('ith-'+itemId); if(th) th.classList.remove('drop-target');
+};
+window.itemDragEnd=function(){ _dragItemId=null; clearDragMarks(); };
+window.itemDrop=function(ev,actId,itemId){
+  ev.preventDefault();
+  const from=_dragItemId; _dragItemId=null; clearDragMarks();
+  if(!from||from===itemId) return;
+  const act=editableAct(actId); if(!act) return;
+  const i=act.items.findIndex(it=>it.id===from);
+  const j=act.items.findIndex(it=>it.id===itemId);
+  if(i<0||j<0||i===j) return;
+  act.items.splice(j,0,act.items.splice(i,1)[0]);  // l'item prend la place de la colonne visee
+  saveData(); render(); toast('✓ Item déplacé');
+};
+window.moveItem=function(actId,itemId,dir){
+  const act=editableAct(actId); if(!act) return;
+  const i=act.items.findIndex(it=>it.id===itemId), j=i+dir;
+  if(i<0||j<0||j>=act.items.length) return;
+  const tmp=act.items[i]; act.items[i]=act.items[j]; act.items[j]=tmp;
+  saveData(); render();
 };
 
 // ── Rename / Delete ──────────────────────────────────────────────────────────

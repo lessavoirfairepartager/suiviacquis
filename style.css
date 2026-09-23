@@ -77,12 +77,25 @@ body { font-family:var(--font); font-size:13px; color:var(--text); background:va
 .act-hdr-right { margin-left:auto; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
 
 /* TABLE */
-.table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+/* .table-scroll defile maintenant dans les DEUX sens. C'est indispensable :
+   en overflow-x seul, le conteneur ne defile pas verticalement, et un
+   en-tete position:sticky n'aurait rien a quoi s'accrocher. La hauteur
+   maximale laisse la place a la barre du haut et a l'entete d'activite. */
+.table-scroll { overflow:auto; max-height:calc(100vh - 150px); -webkit-overflow-scrolling:touch; }
 table { border-collapse:collapse; width:100%; font-size:11px; }
 th,td { border:1px solid var(--border); text-align:center; padding:0; }
 th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap; font-size:10px; }
 .th-student { text-align:left; padding-left:8px; min-width:125px; position:sticky; left:0; z-index:20; background:var(--bg3); font-size:11px; }
-.td-student { text-align:left; padding:0 4px 0 8px; position:sticky; left:0; background:var(--bg2); z-index:10; font-weight:500; font-size:11px; white-space:nowrap; height:30px; min-width:125px; }
+.td-student { text-align:left; padding:0 4px 0 8px; position:sticky; left:0; background:var(--bg2); z-index:10; font-weight:500; font-size:11px; white-space:nowrap; height:30px; min-width:125px; box-shadow:inset -1px 0 0 var(--border); }
+
+/* En-tetes figes. Le decalage vertical de chaque ligne d'en-tete est pose
+   apres rendu par stickyHeads() (app.js), car les hauteurs varient selon les
+   noms de seances et d'items. Les bordures d'un tableau en border-collapse
+   ne suivent pas une cellule collee : on les redessine en ombre interne.
+   Ordre d'empilement : coin eleve (40) > en-tete (30) > colonne eleve (10). */
+.table-scroll thead th { position:sticky; z-index:30; box-shadow:inset 0 -1px 0 var(--border); }
+.table-scroll thead tr:first-child th { top:0; }
+.table-scroll thead .th-student { z-index:40; box-shadow:inset -1px 0 0 var(--border), inset 0 -1px 0 var(--border); }
 
 /* Session header rows */
 .tr-sess-top th { background:#eef4ff; color:#1e40af; font-size:10px; font-weight:600; border-top:2px solid #93c5fd; }
@@ -93,6 +106,11 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 
 /* Item cols */
 .th-item { font-size:10px; padding:3px 2px; min-width:25px; max-width:32px; }
+.th-item.item-drag { cursor:grab; }
+.th-item.drag-src { opacity:.35; }
+.th-item.drop-target { background:var(--blue-bg) !important; outline:2px dashed var(--blue); outline-offset:-2px; }
+.item-move { cursor:pointer; color:var(--text3); font-size:9px; padding:0 2px; user-select:none; -webkit-user-select:none; }
+.item-move:hover { color:var(--blue); }
 .td-item { width:25px; height:30px; padding:0; position:relative; }
 .td-item-inner { width:100%; height:100%; display:flex; align-items:center; justify-content:center; cursor:pointer; }
 .td-item-inner:hover { background:#f0f9ff; }
@@ -186,6 +204,10 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 .projector-content .td-student { background:#0d1117; color:#e6edf3; font-size:13px; font-weight:600; min-width:150px; }
 .projector-content .tr-sess-top th { background:#0f2942; color:#79c0ff; border-top:2px solid #388bfd; font-size:11px; }
 .projector-content .tr-sub-hdr th { background:#131a24; color:#6e7681; font-size:10px; }
+.projector-content .table-scroll { max-height:calc(100vh - 190px); }
+.projector-content .table-scroll thead th { box-shadow:inset 0 -1px 0 #30363d; }
+.projector-content .table-scroll thead .th-student { box-shadow:inset -1px 0 0 #30363d, inset 0 -1px 0 #30363d; }
+.projector-content .td-student { box-shadow:inset -1px 0 0 #30363d; }
 .projector-content .td-item { background:#0d1117; height:36px; }
 .projector-content .td-item-inner { cursor:default; }
 .projector-content .td-item-inner:hover { background:none; }
@@ -282,7 +304,14 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
   .btn-sm { padding:3px 7px; font-size:10px; }
   .th-student,.td-student { min-width:90px; font-size:10px; }
   .section-title { font-size:14px; }
+  .table-scroll { max-height:calc(100vh - 120px); }
 }
 @media(max-width:400px){
   .card-grid { grid-template-columns:1fr; }
+}
+
+/* A l'impression, pas de cadre a defilement ni d'en-tete colle. */
+@media print {
+  .table-scroll { max-height:none; overflow:visible; }
+  .table-scroll thead th { position:static; box-shadow:none; }
 }
