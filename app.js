@@ -575,6 +575,7 @@ function migrateData(){
 }
 
 function render() {
+  captureScroll();          // avant que le HTML ne soit reconstruit
   migrateData();
   renderTopbar();
   const mc=document.getElementById('main-content');
@@ -583,6 +584,34 @@ function render() {
   else if(nav.screen==='seq')   renderSeq(mc);
   updateFab();
   stickyHeads();
+  restoreScroll();
+  _renderedKey=scrollKey();
+}
+
+// ── Position de defilement ───────────────────────────────────────────────────
+// Chaque clic (case d'item, etoile, materiel...) reconstruit tout le HTML, ce
+// qui remet les cadres a defilement en haut a gauche. On releve leur position
+// avant reconstruction et on la repose apres. La cle empeche de reposer la
+// position d'un ecran sur un autre ; l'index suffit a apparier les cadres, le
+// meme ecran produisant les memes tableaux dans le meme ordre.
+let _scrollMem={key:null,pos:[],page:0};
+let _renderedKey=null;   // ecran REELLEMENT affiche : nav a deja change quand render() demarre
+function scrollKey(){ return `${nav.screen}|${nav.classId||''}|${nav.seqId||''}`; }
+function captureScroll(){
+  _scrollMem={
+    key:_renderedKey,
+    pos:Array.prototype.map.call(document.querySelectorAll('.table-scroll'),b=>[b.scrollLeft,b.scrollTop]),
+    page:window.scrollY||0
+  };
+}
+function restoreScroll(){
+  if(_scrollMem.key!==scrollKey()) return;
+  const boxes=document.querySelectorAll('.table-scroll');
+  Array.prototype.forEach.call(boxes,(b,i)=>{
+    const p=_scrollMem.pos[i];
+    if(p){ b.scrollLeft=p[0]; b.scrollTop=p[1]; }   // valeurs hors bornes : le navigateur ramene au max
+  });
+  if(_scrollMem.page) window.scrollTo(0,_scrollMem.page);
 }
 
 // ── En-tetes de tableau figes ────────────────────────────────────────────────
