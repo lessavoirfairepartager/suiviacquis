@@ -88,6 +88,13 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 .th-student { text-align:left; padding-left:8px; min-width:125px; position:sticky; left:0; z-index:20; background:var(--bg3); font-size:11px; }
 .td-student { text-align:left; padding:0 4px 0 8px; position:sticky; left:0; background:var(--bg2); z-index:10; font-weight:500; font-size:11px; white-space:nowrap; height:30px; min-width:125px; box-shadow:inset -1px 0 0 var(--border); }
 
+/* Colonnes collees a droite (Note, competences) : seules les seances et les
+   items defilent horizontalement. Le decalage "right" est pose par stickyRight()
+   (app.js). Fond opaque obligatoire, sinon le defilement transparait dessous. */
+.stk-r { position:sticky; z-index:9; background:var(--bg2); }
+thead .stk-r { background:var(--bg3); }
+.table-scroll thead th.stk-r { z-index:35; }
+
 /* En-tetes figes. Le decalage vertical de chaque ligne d'en-tete est pose
    apres rendu par stickyHeads() (app.js), car les hauteurs varient selon les
    noms de seances et d'items. Les bordures d'un tableau en border-collapse
@@ -169,6 +176,11 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 /* Score header */
 .th-score-group { font-size:9px; padding:3px 4px; }
 
+/* Colonnes de competences fines (20 px) et de note (34 px mini) */
+.col-comp { width:20px; min-width:20px; max-width:20px; padding:2px 0; font-size:9px; }
+td.col-comp { padding:0; }
+.col-note { min-width:34px; padding:0 2px; }
+
 /* Tooltip */
 .tip { position:relative; }
 .tip-text { visibility:hidden; opacity:0; position:absolute; bottom:calc(100% + 3px); left:50%; transform:translateX(-50%); background:#1e293b; color:#f1f5f9; font-size:9px; padding:2px 7px; border-radius:4px; white-space:nowrap; pointer-events:none; transition:opacity .15s; z-index:50; }
@@ -176,6 +188,23 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 
 /* GLOBAL VIEW */
 .gv-score { font-weight:600; font-size:11px; padding:3px 5px; min-width:42px; text-align:center; }
+
+/* Tableaux des vues globales : largeurs calculees par fitGV() (app.js) */
+.gv-fit { table-layout:fixed; }
+.gv-fit .th-student, .gv-fit .td-student { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.gv-fit .gv-score { min-width:0; padding:3px 1px; }
+.gv-fit th { padding:3px 1px; white-space:normal; }
+.gv-fit .td-star, .gv-fit .td-mat { width:auto; }
+.gv-h-in { display:block; font-size:9px; line-height:1.15; overflow-wrap:anywhere; max-height:5.5em; overflow:hidden; }
+/* En-tetes pivotes quand les colonnes sont tres etroites */
+.gv-vert .gv-h { vertical-align:bottom; }
+.gv-vert .gv-score { font-size:10px; }
+.gv-vert .gv-h-in { writing-mode:vertical-rl; max-height:130px; max-width:1.3em; margin:0 auto; text-align:left; }
+.gv-vert .gv-h-in br { display:none; }
+.vs-first { border-left:2px solid #fdba74 !important; }
+.vs-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:6px 0 8px; font-size:11px; color:var(--text2); }
+.vs-date { border:1px solid var(--border2); border-radius:var(--radius); padding:3px 6px; font-size:11px; font-family:var(--font); background:var(--bg); color:var(--text); }
+.vs-note { color:var(--text3); font-size:10px; margin-left:4px; }
 
 /* MODAL */
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:300; display:flex; align-items:center; justify-content:center; padding:16px; }
@@ -240,6 +269,9 @@ th { font-weight:500; background:var(--bg3); padding:4px 5px; white-space:nowrap
 .projector-content .pres-present { background:#0d3520 !important; }
 .projector-content .pres-absent  { background:#3d0000 !important; }
 .projector-content .pres-exclu   { background:#2d1d00 !important; }
+/* Colonnes collees a droite */
+.projector-content .stk-r { background:#0d1117; }
+.projector-content thead .stk-r { background:#161b22; }
 /* Stars T/A */
 .projector-content .td-star { height:36px; }
 .projector-content .td-mat { height:36px; }

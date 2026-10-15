@@ -583,7 +583,9 @@ function render() {
   else if(nav.screen==='class') renderClass(mc);
   else if(nav.screen==='seq')   renderSeq(mc);
   updateFab();
+  fitGV();
   stickyHeads();
+  stickyRight();
   restoreScroll();
   _renderedKey=scrollKey();
 }
@@ -631,10 +633,26 @@ function stickyHeads(root){
     });
   });
 }
+// Colonnes collees a droite (Note, competences) : le decalage "right" de chaque
+// cellule data-sc="k" est la somme des largeurs reelles des colonnes k' < k,
+// mesurees sur la derniere ligne du tableau (ligne moyenne, cellules simples).
+function stickyRight(root){
+  (root||document).querySelectorAll('.table-scroll table').forEach(tb=>{
+    const cells=tb.querySelectorAll('[data-sc]'); if(!cells.length) return;
+    const rows=tb.tBodies[0]&&tb.tBodies[0].rows; if(!rows||!rows.length) return;
+    const w={}; let maxK=0;
+    Array.prototype.forEach.call(rows[rows.length-1].querySelectorAll('[data-sc]'),c=>{
+      const k=+c.dataset.sc; w[k]=c.getBoundingClientRect().width; if(k>maxK) maxK=k;
+    });
+    const off={}; let acc=0;
+    for(let k=0;k<=maxK;k++){ off[k]=acc; acc+=(w[k]||0); }
+    Array.prototype.forEach.call(cells,c=>{ c.style.right=(off[+c.dataset.sc]||0)+'px'; });
+  });
+}
 let _stickyTimer=null;
 window.addEventListener('resize',()=>{
   clearTimeout(_stickyTimer);
-  _stickyTimer=setTimeout(()=>stickyHeads(),150);
+  _stickyTimer=setTimeout(()=>{ fitGV(); stickyHeads(); stickyRight(); },150);
 });
 
 // Activation mode prof :
@@ -900,10 +918,100 @@ function renderClass(mc) {
   mc.innerHTML=h;
 }
 
+// ── Vie scolaire : présence, travail, attitude, exclusions, matériel, infirmerie ─
+// Résumé par élève sur un ensemble de séquences, éventuellement borné par dates.
+// Affichage uniquement : la plage choisie (VS_RANGE) n'est ni stockée ni synchronisée.
+var VS_RANGE={};   // classId -> {from:'AAAA-MM-JJ', to:'AAAA-MM-JJ'} ; vide = toute l'année
+function vsInRange(sess,from,to){
+  if(!from&&!to) return true;
+  if(!sess.date) return false;                 // séance sans date : exclue dès qu'une borne est posée
+  if(from&&sess.date<from) return false;
+  if(to&&sess.date>to) return false;
+  return true;
+}
+function vsStats(seqs,stId,from,to){
+  const s={n:0,pres:0,retard:0,abs:0,exclu:0,excl:0,tSum:0,tN:0,aSum:0,aN:0,m1:0,m2:0,m3:0,mN:0,inf:0};
+  (seqs||[]).forEach(sq=>(sq.activities||[]).forEach(act=>{
+    const sd=(act.studentData||{})[stId]||{}, pres=sd.presence||{}, tae=sd.tae||{};
+    (act.sessions||[]).forEach(sess=>{
+      if(!vsInRange(sess,from,to)) return;
+      const p=pres[sess.id]||'none';
+      if(p==='present'||p==='retard'||p==='absent'||p==='exclu'){
+        s.n++;
+        if(p==='present') s.pres++;
+        else if(p==='retard'){ s.pres++; s.retard++; }
+        else if(p==='absent') s.abs++;
+        else s.exclu++;
+      }
+      if(tae[sess.id+'_e']||p==='exclu') s.excl++;
+      if(tae[sess.id+'_i']) s.inf++;
+      const mv=tae[sess.id+'_m'];
+      if(mv>=1&&mv<=3){ s['m'+mv]++; s.mN++; }
+      if(p==='present'||p==='retard'){
+        const tv=tae[sess.id+'_t']!==undefined?tae[sess.id+'_t']:1;
+        const av=tae[sess.id+'_a']!==undefined?tae[sess.id+'_a']:1;
+        if(tv>0){ s.tSum+=tv; s.tN++; }
+        if(av>0){ s.aSum+=av; s.aN++; }
+      }
+    });
+  }));
+  return s;
+}
+function vsCount(seqs,from,to){
+  let inR=0,undated=0;
+  (seqs||[]).forEach(sq=>(sq.activities||[]).forEach(act=>(act.sessions||[]).forEach(sess=>{
+    if(vsInRange(sess,from,to)) inR++;
+    else if(!sess.date&&(from||to)) undated++;
+  })));
+  return {inR,undated};
+}
+function vsHead(){
+  return `<th class="vs-first" title="Présences (retards non compris)">Prés.</th>`+
+    `<th title="Absences">Abs.</th><th title="Retards">Ret.</th>`+
+    `<th title="Travail : niveau moyen">T</th><th title="Attitude : niveau moyen">A</th>`+
+    `<th title="Exclusions (nombre)">E</th><th title="Matériel : séances avec matériel incomplet ou oublié">M</th>`+
+    `<th title="Passages à l\u2019infirmerie (nombre)">I</th>`;
+}
+const VS_COLS='<col data-k="fx" data-w="26"><col data-k="fx" data-w="26"><col data-k="fx" data-w="26"><col data-k="fx" data-w="22"><col data-k="fx" data-w="22"><col data-k="fx" data-w="22"><col data-k="fx" data-w="24"><col data-k="fx" data-w="22">';
+function vsCells(s){
+  const f1=v=>(Math.round(v*10)/10).toString().replace('.',',');
+  let h='';
+  const pur=s.pres-s.retard;   // présences hors retards (s.pres inclut les retards)
+  if(!s.n){
+    h+=`<td class="vs-first score-na" title="Aucune présence renseignée">·</td><td class="score-na">·</td><td class="score-na">·</td>`;
+  } else {
+    const t=`sur ${s.n} séance(s) renseignée(s)`;
+    h+=`<td class="vs-first gv-score ${pur?'score-hi':'score-na'}" title="${pur} présence(s) ${t}">${pur||'·'}</td>`;
+    h+=`<td class="gv-score ${s.abs?'score-lo':'score-na'}" title="${s.abs} absence(s) ${t}">${s.abs||'·'}</td>`;
+    h+=`<td class="gv-score ${s.retard?'score-mid':'score-na'}" title="${s.retard} retard(s) ${t}">${s.retard||'·'}</td>`;
+  }
+  [['Travail',s.tSum,s.tN],['Attitude',s.aSum,s.aN]].forEach(x=>{
+    if(!x[2]){ h+=`<td class="td-star"><div class="star-widget star-0 star-readonly" title="${x[0]} : non renseigné">·</div></td>`; return; }
+    const mean=x[1]/x[2], l=Math.min(4,Math.max(1,Math.round(mean)));
+    h+=`<td class="td-star"><div class="star-widget star-${l} star-readonly" title="${x[0]} : niveau moyen ${f1(mean)} sur 4 (1 = excellent, 4 = insuffisant), ${x[2]} séance(s)">${starSquare(l)}</div></td>`;
+  });
+  h+=s.excl
+    ? `<td class="td-star"><div class="star-widget star-4 star-readonly" title="${s.excl} exclusion(s)">${s.excl}</div></td>`
+    : `<td class="td-star"><div class="star-widget star-0 star-readonly" title="Aucune exclusion">·</div></td>`;
+  if(!s.mN) h+=`<td class="td-mat"><div class="star-widget mat-0 star-readonly" title="Matériel : non renseigné">·</div></td>`;
+  else{
+    const bad=s.m2+s.m3, cls=bad===0?'mat-1':(s.m3?'mat-3':'mat-2');
+    h+=`<td class="td-mat"><div class="star-widget ${cls} star-readonly" title="${s.m1} complet, ${s.m2} incomplet, ${s.m3} oublié — sur ${s.mN} séance(s) renseignée(s)">${bad===0?'✓':bad}</div></td>`;
+  }
+  h+=s.inf
+    ? `<td class="td-mat"><div class="star-widget inf-on star-readonly" title="${s.inf} passage(s) à l\u2019infirmerie">${s.inf}</div></td>`
+    : `<td class="td-mat"><div class="star-widget mat-0 star-readonly" title="Aucun passage à l\u2019infirmerie">·</div></td>`;
+  return h;
+}
+
+// Libellé d'en-tête : le <span> interne permet de le faire pivoter (colonnes très
+// étroites) sans que le navigateur ignore la hauteur maximale d'une cellule.
+function gvH(label,extra){ return `<span class="gv-h-in">${label}${extra||''}</span>`; }
+
 // ── Global view ──────────────────────────────────────────────────────────────
 function renderGlobalView(cl) {
   const sts=visibleStudents(cl), seqs=cl.sequences||[];
-  const comps=getComps(cl);
+  const comps=getComps(cl), nC=comps.length;
   let h=`<div class="section-hdr"><span class="section-title">Vue globale des notes et compétences</span></div>`;
   h+=`<div class="card" style="overflow:hidden;margin-bottom:8px">`;
   h+=`<div class="seq-tabs-wrap" id="gv-tabs">`;
@@ -916,20 +1024,28 @@ function renderGlobalView(cl) {
     if(!acts.length){h+=`<div class="no-data">Aucune activité.</div>`;h+=`</div>`;return;}
 
     const hasComps=acts.some(a=>(a.items||[]).some(it=>it.compId));
+    let nScore=0; acts.forEach(a=>{ nScore+=1+(a.qcmNotes||[]).length; });
 
-    h+=`<div class="table-scroll"><table><thead><tr>`;
-    h+=`<th class="th-student">Élève</th>`;
+    // Colonnes : leur largeur est calculée par fitGV() d'après la place disponible.
+    let cg='<colgroup><col data-k="st">';
+    for(let i=0;i<nScore;i++) cg+='<col data-k="sc">';
+    if(hasComps) for(let i=0;i<nC;i++) cg+='<col data-k="fx" data-w="22">';
+    cg+=VS_COLS+'</colgroup>';
+
+    h+=`<div class="table-scroll"><table class="gv-fit">${cg}<thead>`;
+    h+=`<tr class="tr-sess-top"><th class="th-student" rowspan="2">Élève</th>`;
+    h+=`<th colspan="${nScore}">Notes /10</th>`;
+    if(hasComps) h+=`<th colspan="${nC}" style="background:#f5f3ff;color:#5b21b6;border-left:2px solid #a78bfa">Compétences</th>`;
+    h+=`<th colspan="8" class="vs-first" style="background:#fff7ed;color:#9a3412;border-left:2px solid #fdba74">Vie scolaire</th></tr>`;
+    h+=`<tr class="tr-sub-hdr">`;
     acts.forEach(act=>{
-      h+=`<th style="font-size:10px;padding:4px 6px;min-width:65px">${esc(act.name)}</th>`;
+      h+=`<th class="gv-h" title="${esc(act.name)}">${gvH(esc(act.name))}</th>`;
       (act.qcmNotes||[]).forEach(q=>{
-        h+=`<th style="font-size:10px;padding:4px 6px;min-width:60px;background:#f0fdf4;color:#166534">
-          📝 ${esc(q.name)}<br>
-          <span style="font-weight:400;font-size:9px">/${q.max}/10${q.date?' · '+fmtDate(q.date):''}</span>
-        </th>`;
+        h+=`<th class="gv-h" style="background:#f0fdf4;color:#166534" title="${esc(q.name)} (/${q.max}, ramené sur 10)${q.date?' — '+fmtDate(q.date):''}">${gvH('📝 '+esc(q.name),`<br><span style="font-weight:400;font-size:9px">/${q.max}${q.date?' · '+fmtDate(q.date):''}</span>`)}</th>`;
       });
     });
-    if(hasComps) comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:42px;background:${c.color};color:${c.text};cursor:help" title="${esc(compTip(cl,c))}">${c.short}</th>`);
-    h+=`</tr></thead><tbody>`;
+    if(hasComps) comps.forEach((c,ci)=>h+=`<th style="font-size:9px;padding:3px 1px;background:${c.color};color:${c.text};cursor:help;${ci===0?'border-left:2px solid #a78bfa':''}" title="${esc(compTip(cl,c))}">${c.short}</th>`);
+    h+=vsHead()+`</tr></thead><tbody>`;
 
     const avgs=acts.map(act=>{
       const vals=sts.map(st=>{
@@ -973,12 +1089,13 @@ function renderGlobalView(cl) {
       });
       if(hasComps){
         const lvls=computeCompAcq(cl,sq,st.id);
-        comps.forEach(c=>{
-          const lv=lvls[c.id];
-          if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3);background:${c.color}20">·</td>`;return;}
-          h+=`<td style="font-size:10px;font-weight:700;text-align:center;background:${lv.bg};color:${lv.fg}" title="${lv.label} (${lv.pct.toFixed(0)}%)">${lv.id}</td>`;
+        comps.forEach((c,ci)=>{
+          const lv=lvls[c.id], bl=ci===0?'border-left:2px solid #a78bfa;':'';
+          if(!lv){h+=`<td style="${bl}font-size:9px;text-align:center;color:var(--text3);background:${c.color}20">·</td>`;return;}
+          h+=`<td style="${bl}font-size:10px;font-weight:700;text-align:center;background:${lv.bg};color:${lv.fg}" title="${lv.label} (${lv.pct.toFixed(0)}%)">${lv.id}</td>`;
         });
       }
+      h+=vsCells(vsStats([sq],st.id,'',''));
       h+=`</tr>`;
     });
 
@@ -993,7 +1110,7 @@ function renderGlobalView(cl) {
       });
     });
     if(hasComps) comps.forEach(()=>h+=`<td></td>`);
-    h+=`</tr>`;
+    h+=`<td colspan="8"></td></tr>`;
 
     h+=`</tbody></table></div>`;
 
@@ -1005,9 +1122,9 @@ function renderGlobalView(cl) {
           ${domLabel}
           <button class="btn btn-xs" onclick="exportLivret('${cl.id}','${sq.id}')" style="font-size:10px">📋 Export Livret</button>
         </div>
-        <div class="table-scroll"><table>
+        <div class="table-scroll"><table class="gv-fit"><colgroup><col data-k="st">${SOCLE.map(()=>'<col data-k="fx" data-w="40">').join('')}</colgroup>
         <thead><tr><th class="th-student">Élève</th>`;
-      SOCLE.forEach(dom=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:48px;background:${dom.color};color:${dom.text}" title="${esc(dom.desc)}">${dom.id}</th>`);
+      SOCLE.forEach(dom=>h+=`<th style="font-size:9px;padding:3px 2px;background:${dom.color};color:${dom.text}" title="${esc(dom.desc)}">${dom.id}</th>`);
       h+=`</tr></thead><tbody>`;
       sts.forEach(st=>{
         const sLvls=computeSocleAcq(cl,sq,st.id);
@@ -1029,35 +1146,55 @@ function renderGlobalView(cl) {
   return h;
 }
 
-// ── Bilan annuel des compétences (toutes séquences confondues) ──────────────
+// ── Bilan annuel (compétences + vie scolaire sur la période choisie) ─────────
 function renderAnnualCompTable(cl) {
-  const sts=visibleStudents(cl);
-  const comps=getComps(cl);
-  const hasComps=(cl.sequences||[]).some(sq=>(sq.activities||[]).some(a=>(a.items||[]).some(it=>it.compId)));
-  if(!hasComps||!sts.length) return '';
-  const showSocle=usesSocle(cl);
+  const sts=visibleStudents(cl), seqs=cl.sequences||[];
+  const comps=getComps(cl), nC=comps.length;
+  const hasComps=seqs.some(sq=>(sq.activities||[]).some(a=>(a.items||[]).some(it=>it.compId)));
+  const hasSess=seqs.some(sq=>(sq.activities||[]).some(a=>(a.sessions||[]).length));
+  if((!hasComps&&!hasSess)||!sts.length) return '';
+  const showSocle=usesSocle(cl)&&hasComps;
+  const rg=VS_RANGE[cl.id]||{from:'',to:''};
+  const cnt=vsCount(seqs,rg.from,rg.to);
   let h=`<div class="section-hdr" style="margin-top:14px">
-    <span class="section-title">Bilan annuel des compétences</span>
-    <span style="font-size:10px;color:var(--text3);margin-left:8px">3 derniers items par compétence, toutes séquences confondues</span>
+    <span class="section-title">Bilan annuel</span>
+    <span style="font-size:10px;color:var(--text3);margin-left:8px">compétences : 3 derniers items par compétence, toutes séquences confondues</span>
   </div>`;
-  h+=`<div class="card" style="overflow:hidden;margin-bottom:8px"><div class="table-scroll"><table><thead><tr><th class="th-student">Élève</th>`;
-  comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:42px;background:${c.color};color:${c.text};cursor:help" title="${esc(compTip(cl,c))}">${c.short}</th>`);
-  h+=`</tr></thead><tbody>`;
+  h+=`<div class="vs-bar">
+    <span class="vs-bar-lbl">Vie scolaire du</span>
+    <input type="date" class="vs-date" value="${esc(rg.from)}"${rg.to?` max="${esc(rg.to)}"`:''} onchange="setVSRange('${cl.id}','from',this.value)">
+    <span class="vs-bar-lbl">au</span>
+    <input type="date" class="vs-date" value="${esc(rg.to)}"${rg.from?` min="${esc(rg.from)}"`:''} onchange="setVSRange('${cl.id}','to',this.value)">
+    <button class="btn btn-xs" onclick="setVSRange('${cl.id}','reset')" title="Reprendre toutes les séances">Toute l'année</button>
+    <span class="vs-note">${cnt.inR} séance(s) prise(s) en compte${cnt.undated?` · ${cnt.undated} séance(s) sans date ignorée(s)`:''}</span>
+  </div>`;
+  let cg='<colgroup><col data-k="st">';
+  if(hasComps) for(let i=0;i<nC;i++) cg+='<col data-k="fx" data-w="34">';
+  cg+=VS_COLS+'</colgroup>';
+  h+=`<div class="card" style="overflow:hidden;margin-bottom:8px"><div class="table-scroll"><table class="gv-fit">${cg}<thead>`;
+  h+=`<tr class="tr-sess-top"><th class="th-student" rowspan="2">Élève</th>`;
+  if(hasComps) h+=`<th colspan="${nC}" style="background:#f5f3ff;color:#5b21b6">Compétences</th>`;
+  h+=`<th colspan="8" class="vs-first" style="background:#fff7ed;color:#9a3412;border-left:2px solid #fdba74">Vie scolaire</th></tr><tr class="tr-sub-hdr">`;
+  if(hasComps) comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 2px;background:${c.color};color:${c.text};cursor:help" title="${esc(compTip(cl,c))}">${c.short}</th>`);
+  h+=vsHead()+`</tr></thead><tbody>`;
   sts.forEach(st=>{
-    const lvls=computeCompAcqAnnuelle(cl,st.id);
     h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
-    comps.forEach(c=>{
-      const lv=lvls[c.id];
-      if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3)">·</td>`;return;}
-      h+=`<td style="font-size:10px;font-weight:700;text-align:center;background:${lv.bg};color:${lv.fg};cursor:help" title="${esc(c.label)}\n${lv.label} (${lv.pct.toFixed(0)}%) — ${lv.info}">${lv.id}</td>`;
-    });
+    if(hasComps){
+      const lvls=computeCompAcqAnnuelle(cl,st.id);
+      comps.forEach(c=>{
+        const lv=lvls[c.id];
+        if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3)">·</td>`;return;}
+        h+=`<td style="font-size:10px;font-weight:700;text-align:center;background:${lv.bg};color:${lv.fg};cursor:help" title="${esc(c.label)}\n${lv.label} (${lv.pct.toFixed(0)}%) — ${lv.info}">${lv.id}</td>`;
+      });
+    }
+    h+=vsCells(vsStats(seqs,st.id,rg.from,rg.to));
     h+=`</tr>`;
   });
   h+=`</tbody></table></div></div>`;
   if(showSocle){
     h+=`<div style="padding:0 0 8px"><div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:8px">Domaines du socle commun (DNB) — bilan annuel</div>
-      <div class="card" style="overflow:hidden"><div class="table-scroll"><table><thead><tr><th class="th-student">Élève</th>`;
-    SOCLE.forEach(dom=>h+=`<th style="font-size:9px;padding:3px 5px;min-width:48px;background:${dom.color};color:${dom.text}" title="${esc(dom.desc)}">${dom.id}</th>`);
+      <div class="card" style="overflow:hidden"><div class="table-scroll"><table class="gv-fit"><colgroup><col data-k="st">${SOCLE.map(()=>'<col data-k="fx" data-w="40">').join('')}</colgroup><thead><tr><th class="th-student">Élève</th>`;
+    SOCLE.forEach(dom=>h+=`<th style="font-size:9px;padding:3px 2px;background:${dom.color};color:${dom.text}" title="${esc(dom.desc)}">${dom.id}</th>`);
     h+=`</tr></thead><tbody>`;
     sts.forEach(st=>{
       const sLvls=computeSocleAcqAnnuelle(cl,st.id);
@@ -1074,10 +1211,57 @@ function renderAnnualCompTable(cl) {
   return h;
 }
 
+window.setVSRange=function(clId,k,v){
+  if(k==='reset') VS_RANGE[clId]={from:'',to:''};
+  else{
+    const r=VS_RANGE[clId]||(VS_RANGE[clId]={from:'',to:''});
+    r[k]=v||'';
+    if(r.from&&r.to&&r.from>r.to){ if(k==='from') r.to=r.from; else r.from=r.to; }
+  }
+  render();
+};
+
+// ── Ajustement des colonnes des vues globales ────────────────────────────────
+// Objectif : tout voir sans ascenseur horizontal. Pour chaque tableau .gv-fit,
+// la colonne Élève prend la largeur de son plus long nom, les colonnes fixes
+// (compétences, vie scolaire) gardent leur largeur étroite, et les colonnes de
+// notes se partagent le reste. Si elles tombent sous ~64 px, les en-têtes sont
+// pivotés (classe gv-vert) ; plancher à 24 px, en dessous l'ascenseur revient.
+let _fitCtx=null;
+function fitGV(){
+  if(!_fitCtx){ const cv=document.createElement('canvas'); _fitCtx=cv.getContext('2d'); }
+  _fitCtx.font='500 11px '+getComputedStyle(document.body).fontFamily;
+  document.querySelectorAll('table.gv-fit').forEach(tb=>{
+    const box=tb.parentElement;
+    if(!box||!box.offsetParent) return;          // panneau masqué : refait à l'affichage
+    const W=box.clientWidth; if(W<=0) return;
+    const cols=tb.querySelectorAll('colgroup col'); if(!cols.length) return;
+    let maxName=0;
+    tb.querySelectorAll('tbody td.td-student').forEach(td=>{
+      const w=_fitCtx.measureText((td.textContent||'').trim()).width; if(w>maxName) maxName=w;
+    });
+    const stW=Math.min(130,Math.max(70,Math.ceil(maxName)+26));
+    let fixed=stW, nSc=0;
+    cols.forEach(c=>{ if(c.dataset.k==='fx') fixed+=(+c.dataset.w); else if(c.dataset.k==='sc') nSc++; });
+    let scW=nSc?Math.floor((W-fixed-2)/nSc):0;
+    const vertical=nSc>0&&scW<64;
+    scW=Math.min(140,Math.max(24,scW));
+    let total=0;
+    cols.forEach(c=>{
+      const w=c.dataset.k==='st'?stW:(c.dataset.k==='fx'?(+c.dataset.w):scW);
+      c.style.width=w+'px'; total+=w;
+    });
+    tb.style.tableLayout='fixed';
+    tb.style.width=total+'px';
+    tb.classList.toggle('gv-vert',vertical);
+  });
+}
+
 window.switchGV=function(sqId){
   document.querySelectorAll('.gv-panel').forEach(p=>p.style.display='none');
   document.querySelectorAll('#gv-tabs .seq-tab').forEach(t=>t.classList.toggle('active',t.dataset.sqid===sqId));
   const p=document.getElementById('gvp-'+sqId);if(p)p.style.display='';
+  fitGV(); stickyHeads(p||undefined);
 };
 
 // ── Seq view ─────────────────────────────────────────────────────────────────
@@ -1235,14 +1419,12 @@ function renderActTable(act,sts,cl,forProj) {
     const span=items.length+(canEdit?1:0);
     h+=`<th colspan="${span}" style="border-left:2px solid #6ee7b7;background:#f0fdf4;color:#166534">Items (${items.length})</th>`;
   }
-  // Colonnes observations de compétences (auto-suggéré + modifiable à la main)
-  const hasManualComps=true; // toujours visible si des compétences existent
-  if(hasManualComps){
-    h+=`<th colspan="${comps.length}" style="border-left:2px solid #a78bfa;background:#f5f3ff;color:#5b21b6;font-size:10px">
-      Obs. compétences${canEdit?` <span style="font-size:8px;color:var(--text3)" title="Suggestion automatique d'après les items cochés de cette activité (halo léger) ; clic = observation manuelle, cycle NA→PA→A→M">auto + clic pour modifier</span>`:''}
-    </th>`;
-  }
-  h+=`<th rowspan="2" colspan="2" class="th-score-group" style="min-width:74px">Note<br>/10</th></tr>`;
+  // A droite du tableau, toujours visibles : Note puis compétences (collées via
+  // .stk-r ; leur decalage "right" est pose apres rendu par stickyRight()).
+  // Seules les seances et les items defilent horizontalement.
+  const nC=comps.length;
+  h+=`<th rowspan="2" colspan="2" class="th-score-group stk-r" data-sc="${nC}" style="border-left:2px solid #6ee7b7">Note<br>/10</th>`;
+  h+=`<th colspan="${nC}" class="stk-r" data-sc="0" style="border-left:2px solid #a78bfa;background:#f5f3ff;color:#5b21b6;font-size:9px;white-space:normal" title="Observations de compétences : suggestion automatique d'après les items cochés de cette activité (halo léger) ; clic = observation manuelle, cycle NA→PA→A→M">Compét.</th></tr>`;
 
   // Ligne 2 header
   h+=`<tr class="tr-sub-hdr">`;
@@ -1274,7 +1456,7 @@ function renderActTable(act,sts,cl,forProj) {
       onclick="addItemInline('${act.id}')" title="Ajouter un item">+</div></th>`;
   // Sous-colonnes compétences
   comps.forEach((comp,ci)=>{
-    h+=`<th class="th-item" style="font-size:9px;padding:2px 3px;${ci===0?'border-left:2px solid #a78bfa':''};background:${comp.color};color:${comp.text};cursor:help" title="${esc(compTip(cl,comp))}">${comp.short}</th>`;
+    h+=`<th class="th-item stk-r col-comp" data-sc="${nC-1-ci}" style="${ci===0?'border-left:2px solid #a78bfa;':''}background:${comp.color};color:${comp.text};cursor:help" title="${esc(compTip(cl,comp))}">${comp.short}</th>`;
   });
   h+=`</tr></thead><tbody>`;
 
@@ -1322,39 +1504,6 @@ function renderActTable(act,sts,cl,forProj) {
     });
     if(canEdit) h+=`<td style="width:20px;background:var(--bg3)"></td>`;
 
-    // Colonnes observations de compétences : valeur manuelle si renseignée,
-    // sinon suggestion automatique calculée sur les items de CETTE activité
-    // (halo léger + légère transparence = suggestion, pas une observation
-    // confirmée ; clic = démarre/poursuit une observation manuelle).
-    const manComps = ((act.manualComps||{})[st.id]||{});
-    const autoLvls = computeCompAcqActivite(act, st.id, comps);
-    comps.forEach((comp,ci)=>{
-      const lvlIdx  = manComps[comp.id]; // undefined = pas d'observation manuelle
-      const isManual= lvlIdx!==undefined;
-      const acqObj  = isManual ? ACQ[lvlIdx] : null;
-      const auto    = !isManual ? autoLvls[comp.id] : null;
-      const shown   = acqObj || auto;
-      const bg      = shown ? shown.bg : 'transparent';
-      const fg      = shown ? shown.fg : 'var(--text3)';
-      const isAuto  = !isManual && !!auto;
-      const ring    = isAuto ? `box-shadow:inset 0 0 0 1.5px ${auto.fg}66;` : '';
-      const label   = isManual ? `${comp.label} : ${acqObj.label} (observation manuelle)`
-                    : auto     ? `${comp.label} : suggestion auto — ${auto.label} (${auto.pct.toFixed(0)}%, ${auto.info})`
-                    : `${comp.label} : non renseigné`;
-      h+=`<td style="width:28px;height:30px;padding:0;${ci===0?'border-left:2px solid #a78bfa':''}">`;
-      if(canEdit){
-        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:9px;font-weight:700;background:${bg};color:${fg};${ring}${isAuto?'opacity:.8':''}"
-          onclick="cycleManualComp('${act.id}','${st.id}','${comp.id}')"
-          title="${esc(label)} (clic pour ${isManual?'changer':'confirmer/modifier'})"
-          >${shown?shown.id:'·'}</div>`;
-      } else {
-        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;background:${bg};color:${fg};${isAuto?'opacity:.8':''}"
-          title="${esc(label)}"
-          >${shown?shown.id:''}</div>`;
-      }
-      h+=`</td>`;
-    });
-
     // Score
     const res=computeScore(act,st.id);
     const manualMark=_sd.manualMark;
@@ -1368,24 +1517,58 @@ function renderActTable(act,sts,cl,forProj) {
 
     if(manualMark==='A'||manualMark==='N'){
       const isMA=manualMark==='A';
-      h+=`<td colspan="2" class="td-score" style="color:${isMA?'#6b7280':'#92400e'};background:${isMA?'#f3f4f6':'#fef3c7'};font-weight:700;text-align:center">
+      h+=`<td colspan="2" class="td-score stk-r" data-sc="${nC}" style="color:${isMA?'#6b7280':'#92400e'};background:${isMA?'#f3f4f6':'#fef3c7'};font-weight:700;text-align:center">
         ${manualMark}${canEdit?` ${btnX}`:''}
       </td>`;
     } else if(!res){
-      h+=`<td class="td-score score-na">${anBtns||'—'}</td>`;
-      h+=`<td class="td-score score-na" style="font-size:9px">—</td>`;
+      h+=`<td class="td-score col-note stk-r score-na" data-sc="${nC+1}">${anBtns||'—'}</td>`;
+      h+=`<td class="td-score col-note stk-r score-na" data-sc="${nC}" style="font-size:9px">—</td>`;
     } else if(res.allAbsent){
-      h+=`<td class="td-score" style="color:#6b7280;background:#f3f4f6;font-weight:700" title="Absent à toutes les séances">A</td>`;
-      h+=`<td class="td-score score-na" style="font-size:9px">—</td>`;
+      h+=`<td class="td-score col-note stk-r" data-sc="${nC+1}" style="color:#6b7280;background:#f3f4f6;font-weight:700" title="Absent à toutes les séances">A</td>`;
+      h+=`<td class="td-score col-note stk-r score-na" data-sc="${nC}" style="font-size:9px">—</td>`;
     } else {
-      h+=`<td class="td-score ${scoreCls(res.real)}" title="Note /10">${scoreLbl(res.real)}${anBtns}</td>`;
+      h+=`<td class="td-score col-note stk-r ${scoreCls(res.real)}" data-sc="${nC+1}" title="Note /10">${scoreLbl(res.real)}${anBtns}</td>`;
       if(res.pond!==null){
-        h+=`<td class="td-score ${scoreCls(res.pond)}" style="font-size:10px;opacity:.9"
+        h+=`<td class="td-score col-note stk-r ${scoreCls(res.pond)}" data-sc="${nC}" style="font-size:10px"
             title="Note pondérée : extrapolation sur ${res.totalSess} séances (${res.absSess} abs)">${scoreLbl(res.pond)}<span style="font-size:8px;display:block;font-weight:400">${res.absSess}abs</span></td>`;
       } else {
-        h+=`<td class="td-score score-na" style="font-size:9px;color:var(--text3)">—</td>`;
+        h+=`<td class="td-score col-note stk-r score-na" data-sc="${nC}" style="font-size:9px;color:var(--text3)">—</td>`;
       }
     }
+
+    // Colonnes observations de compétences : valeur manuelle si renseignée,
+    // sinon suggestion automatique calculée sur les items de CETTE activité
+    // (halo léger + légère transparence = suggestion, pas une observation
+    // confirmée ; clic = démarre/poursuit une observation manuelle).
+    const manComps = ((act.manualComps||{})[st.id]||{});
+    const autoLvls = computeCompAcqActivite(act, st.id, comps);
+    comps.forEach((comp,ci)=>{
+      const lvlIdx  = manComps[comp.id]; // undefined = pas d'observation manuelle
+      const isManual= lvlIdx!==undefined;
+      const acqObj  = isManual ? ACQ[lvlIdx] : null;
+      const auto    = !isManual ? autoLvls[comp.id] : null;
+      const shown   = acqObj || auto;
+      const bg      = shown ? shown.bg : 'var(--bg2)';
+      const fg      = shown ? shown.fg : 'var(--text3)';
+      const isAuto  = !isManual && !!auto;
+      const ring    = isAuto ? `box-shadow:inset 0 0 0 1.5px ${auto.fg}66;` : '';
+      const label   = isManual ? `${comp.label} : ${acqObj.label} (observation manuelle)`
+                    : auto     ? `${comp.label} : suggestion auto — ${auto.label} (${auto.pct.toFixed(0)}%, ${auto.info})`
+                    : `${comp.label} : non renseigné`;
+      h+=`<td class="stk-r col-comp" data-sc="${nC-1-ci}" style="height:30px;${ci===0?'border-left:2px solid #a78bfa':''}">`;
+      if(canEdit){
+        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:9px;font-weight:700;background:${bg};color:${fg};${ring}${isAuto?'opacity:.8':''}"
+          onclick="cycleManualComp('${act.id}','${st.id}','${comp.id}')"
+          title="${esc(label)} (clic pour ${isManual?'changer':'confirmer/modifier'})"
+          >${shown?shown.id:'·'}</div>`;
+      } else {
+        h+=`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;background:${bg};color:${fg};${isAuto?'opacity:.8':''}"
+          title="${esc(label)}"
+          >${shown?shown.id:''}</div>`;
+      }
+      h+=`</td>`;
+    });
+
     h+=`</tr>`;
   });
 
@@ -1402,13 +1585,13 @@ function renderActTable(act,sts,cl,forProj) {
   sessions.forEach(()=>h+=`<td colspan="6"></td>`);
   items.forEach(()=>h+=`<td></td>`);
   if(canEdit) h+=`<td></td>`;
-  comps.forEach(()=>h+=`<td></td>`);   // sinon la moyenne se decale sous les colonnes de competences
   if(classAvg!==null){
-    h+=`<td class="td-score ${scoreCls(classAvg)}" style="font-weight:700">${classAvg.toFixed(1)}</td>`;
-    h+=`<td class="td-score score-na" style="font-size:9px">—</td>`;
+    h+=`<td class="td-score col-note stk-r ${scoreCls(classAvg)}" data-sc="${nC+1}" style="font-weight:700">${classAvg.toFixed(1)}</td>`;
+    h+=`<td class="td-score col-note stk-r score-na" data-sc="${nC}" style="font-size:9px;background:var(--bg3)">—</td>`;
   } else {
-    h+=`<td class="td-score score-na">—</td><td class="td-score score-na">—</td>`;
+    h+=`<td class="td-score col-note stk-r score-na" data-sc="${nC+1}" style="background:var(--bg3)">—</td><td class="td-score col-note stk-r score-na" data-sc="${nC}" style="background:var(--bg3)">—</td>`;
   }
+  comps.forEach((c,ci)=>h+=`<td class="stk-r col-comp" data-sc="${nC-1-ci}" style="background:var(--bg3)"></td>`);
   h+=`</tr>`;
 
   h+=`</tbody></table></div>`;
@@ -1432,7 +1615,7 @@ function openProjector() {
   if(act) h+=renderActivity(act,visibleStudents(cl),cl,true);
   h+=`</div>`;
   ov.innerHTML=h; document.body.appendChild(ov); document.body.style.overflow='hidden';
-  stickyHeads(ov);
+  stickyHeads(ov); stickyRight(ov);
 }
 window.switchProjAct=function(actId){
   projActId=actId;
@@ -1441,7 +1624,7 @@ window.switchProjAct=function(actId){
   const body=document.getElementById('proj-body');
   const act=(sq.activities||[]).find(a=>a.id===actId);
   if(body&&act) body.innerHTML=renderActivity(act,visibleStudents(cl),cl,true);
-  stickyHeads(document.getElementById('projector'));
+  stickyHeads(document.getElementById('projector')); stickyRight(document.getElementById('projector'));
 };
 window.closeProjector=function(){
   const el=document.getElementById('projector'); if(el)el.remove();
