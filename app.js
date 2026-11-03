@@ -267,13 +267,415 @@ function displayName(fullName, forProj) {
   if(prenoms.length>0) return esc(prenoms.join(' '));
   return esc(parts[parts.length-1]); // fallback
 }
-// Trie une liste d'élèves par nom, insensible à la casse et aux accents.
-// Renvoie une NOUVELLE liste (n'altère pas l'original) ; utilisé à l'affichage
-// et à l'ajout pour garder la classe classée alphabétiquement.
+// Trie une liste d'élèves pour l'AFFICHAGE, insensible à la casse et aux accents :
+// sur les vrais noms si la clé est chargée, sinon sur les codes.
+// Renvoie une NOUVELLE liste (n'altère pas l'original).
 function sortStudents(list){
+  return (list||[]).slice().sort((a,b)=>
+    nomEleve(a).localeCompare(nomEleve(b), 'fr', {sensitivity:'base', numeric:true})
+  );
+}
+// Trie l'ordre ENREGISTRÉ (celui qui part en ligne) sur le champ name brut,
+// c'est-à-dire sur les codes une fois la classe pseudonymisée. Ne doit JAMAIS
+// passer par la clé : l'ordre stocké en ligne trahirait l'ordre alphabétique.
+function sortStudentsStored(list){
   return (list||[]).slice().sort((a,b)=>
     (a.name||'').localeCompare(b.name||'', 'fr', {sensitivity:'base', numeric:true})
   );
+}
+
+// ── Pseudonymisation des élèves : la « clé des noms » (novembre 2026) ─────────
+// En ligne (Supabase) et dans le localStorage, un élève pseudonymisé vaut
+//   {id, code:'eleve0042', name:'eleve0042', ...}
+// La correspondance code → NOM Prénom vit UNIQUEMENT dans un fichier CSV gardé
+// par le prof (clé USB). Il est lu en mémoire dans les variables ci-dessous :
+// jamais copié dans D, ni en localStorage / sessionStorage, ni envoyé en ligne.
+// Il est oublié à la fermeture de l'onglet et à la déconnexion.
+// Fichier : UTF-8, séparateur ;, colonnes code;NOM;Prénom;Classe;id_interne
+// (Classe sert au prof pour s'y retrouver ; id_interne = id de l'élève dans
+// l'appli, il permet de retrouver le même code si on repseudonymise).
+var CLE_RE = /^eleve\d{4}$/;
+var CLE_NOM_FICHIER = 'cle_eleves_suiviacquis.csv';
+var _cle = null;        // {entrees:[...], parCode:Map, parId:Map, nomFichier}
+var _cleHandle = null;  // fichier ouvert (Chrome/Edge sur PC) : réécrit sur place
+var _cleAttente = null; // pseudonymisation qui attend la vérification du fichier
+
+function estPseudo(st){ return !!(st && st.code && CLE_RE.test(st.code)); }
+
+// Nom à afficher : « NOM Prénom » si la clé est chargée (mode prof), sinon le
+// champ name tel quel (le code, ou le vrai nom d'un élève pas encore pseudonymisé).
+function nomEleve(st){
+  if(!st) return '';
+  if(_cle && D && D.isProfMode){
+    const e=_cle.parCode.get(st.code||st.name);
+    if(e){ const n=[e.nom,e.prenom].filter(Boolean).join(' ').trim(); if(n) return n; }
+  }
+  return st.name||'';
+}
+
+// « DUPONT Alice » → {nom:'DUPONT', prenom:'Alice'} (mots en MAJUSCULES = NOM)
+function separerNom(full){
+  const parts=String(full||'').trim().split(/\s+/).filter(Boolean);
+  const isNom=w=>w===w.toUpperCase() && w.length>1 && /[A-ZÀ-ÖØ-Þ]/.test(w);
+  const noms=parts.filter(isNom), prenoms=parts.filter(w=>!isNom(w));
+  if(!noms.length) return {nom:'', prenom:parts.join(' ')};
+  return {nom:noms.join(' '), prenom:prenoms.join(' ')};
+}
+
+function elevesEnClair(){
+  const out=[];
+  (D.classes||[]).forEach(cl=>(cl.students||[]).forEach(st=>{ if(!estPseudo(st)) out.push({cl,st}); }));
+  return out;
+}
+
+// Garde-fou appelé à chaque rendu : un élève pseudonymisé garde toujours
+// name === code. Si une fusion de synchro (vieil appareil hors ligne) y avait
+// réinjecté un vrai nom, on le remet aussitôt au code — sans avoir besoin de la clé.
+function garderPseudo(){
+  if(!D||!D.classes) return;
+  let ch=false;
+  D.classes.forEach(cl=>(cl.students||[]).forEach(st=>{
+    if(!st.code && CLE_RE.test(st.name||'')){ st.code=st.name; ch=true; }
+    if(st.code && st.name!==st.code){ st.name=st.code; ch=true; }
+  }));
+  if(ch && typeof saveData==='function') saveData();
+}
+
+// ── Lecture / écriture du fichier CSV ──
+function csvLignes(txt){
+  txt=String(txt||'').replace(/^﻿/,'');
+  const l1=txt.split(/\r?\n/)[0]||'';
+  const sep=l1.indexOf(';')>=0 ? ';' : (l1.indexOf('\t')>=0 ? '\t' : ',');
+  const rows=[]; let row=[], cell='', q=false;
+  for(let i=0;i<txt.length;i++){
+    const c=txt[i];
+    if(q){
+      if(c==='"'){ if(txt[i+1]==='"'){ cell+='"'; i++; } else q=false; }
+      else cell+=c;
+    } else if(c==='"') q=true;
+    else if(c===sep){ row.push(cell); cell=''; }
+    else if(c==='\n'||c==='\r'){
+      if(c==='\r'&&txt[i+1]==='\n') i++;
+      row.push(cell); rows.push(row); row=[]; cell='';
+    } else cell+=c;
+  }
+  if(cell!==''||row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r=>r.some(v=>String(v).trim()!==''));
+}
+function construireCle(entrees, nomFichier){
+  const parCode=new Map(), parId=new Map();
+  entrees.forEach(e=>{ parCode.set(e.code,e); if(e.id) parId.set(String(e.id),e); });
+  return {entrees, parCode, parId, nomFichier:nomFichier||CLE_NOM_FICHIER};
+}
+function cleDepuisTexte(txt, nomFichier){
+  const rows=csvLignes(txt);
+  if(!rows.length) throw new Error('fichier vide');
+  const norm=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z]/g,'');
+  const h=rows[0].map(norm);
+  const col=k=>h.findIndex(x=>x===k);
+  const iCode=col('code'), iNom=col('nom'), iPre=col('prenom'), iCl=col('classe');
+  let iId=col('idinterne'); if(iId<0) iId=col('id');
+  if(iCode<0||(iNom<0&&iPre<0)) throw new Error("colonnes « code », « NOM » et « Prénom » introuvables sur la 1re ligne");
+  const entrees=[], vus=new Set();
+  rows.slice(1).forEach((r,k)=>{
+    const code=String(r[iCode]||'').trim().toLowerCase();
+    if(!code) return;
+    if(!CLE_RE.test(code)) throw new Error(`ligne ${k+2} : code « ${code} » invalide (attendu eleve + 4 chiffres)`);
+    if(vus.has(code)) throw new Error(`ligne ${k+2} : le code ${code} apparaît deux fois`);
+    vus.add(code);
+    entrees.push({
+      code,
+      nom:   iNom>=0 ? String(r[iNom]||'').trim() : '',
+      prenom:iPre>=0 ? String(r[iPre]||'').trim() : '',
+      classe:iCl>=0  ? String(r[iCl]||'').trim()  : '',
+      id:    iId>=0  ? String(r[iId]||'').trim()  : ''
+    });
+  });
+  return construireCle(entrees, nomFichier);
+}
+function cleVersTexte(entrees){
+  const q=v=>{ v=String(v==null?'':v); return /[";\r\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
+  const tri=entrees.slice().sort((a,b)=>
+    (a.classe||'').localeCompare(b.classe||'','fr',{numeric:true}) ||
+    (a.nom||'').localeCompare(b.nom||'','fr',{sensitivity:'base'}) ||
+    (a.prenom||'').localeCompare(b.prenom||'','fr',{sensitivity:'base'}));
+  const lignes=['code;NOM;Prénom;Classe;id_interne'];
+  tri.forEach(e=>lignes.push([e.code,e.nom,e.prenom,e.classe,e.id].map(q).join(';')));
+  return '﻿'+lignes.join('\r\n')+'\r\n';
+}
+// Vérifie que le fichier relu contient bien toutes les lignes attendues.
+function verifierCle(relue, attendues){
+  attendues.forEach(e=>{
+    const r=relue.parCode.get(e.code);
+    if(!r || r.nom!==e.nom || r.prenom!==e.prenom)
+      throw new Error(`le code ${e.code} manque ou ne correspond pas dans le fichier relu`);
+  });
+}
+function telechargerTexte(txt, nom){
+  const blob=new Blob([txt],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=nom;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+}
+function choisirFichierCSV(){
+  return new Promise(resolve=>{
+    const inp=document.createElement('input');
+    inp.type='file'; inp.accept='.csv,text/csv';
+    inp.onchange=()=>resolve(inp.files&&inp.files[0]||null);
+    inp.addEventListener('cancel',()=>resolve(null));
+    inp.click();
+  });
+}
+var CLE_TYPES=[{description:'Clé des noms (CSV)', accept:{'text/csv':['.csv']}}];
+
+// Ouvre un fichier de clé. Renvoie {cle, handle} ou null (annulé).
+async function lireFichierCle(){
+  if(window.showOpenFilePicker){
+    let h;
+    try{ [h]=await window.showOpenFilePicker({types:CLE_TYPES, multiple:false}); }
+    catch(e){ if(e&&e.name==='AbortError') return null; throw e; }
+    const f=await h.getFile();
+    return {cle:cleDepuisTexte(await f.text(), f.name), handle:h};
+  }
+  const f=await choisirFichierCSV(); if(!f) return null;
+  return {cle:cleDepuisTexte(await f.text(), f.name), handle:null};
+}
+
+// Écrit la clé complète. Chrome/Edge sur PC : réécrit le fichier ouvert (ou
+// demande où l'enregistrer), puis le RELIT pour vérifier → {verifie:true}.
+// Autres navigateurs : téléchargement → {verifie:false}. Lève une erreur
+// (AbortError si annulé) sans rien modifier en cas d'échec.
+async function ecrireCle(entrees){
+  const txt=cleVersTexte(entrees);
+  let h=_cleHandle;
+  if(!h && window.showSaveFilePicker){
+    h=await window.showSaveFilePicker({suggestedName:CLE_NOM_FICHIER, types:CLE_TYPES});
+  }
+  if(h){
+    if(h.queryPermission && (await h.queryPermission({mode:'readwrite'}))!=='granted'){
+      if((await h.requestPermission({mode:'readwrite'}))!=='granted')
+        throw new Error("le navigateur n'a pas autorisé l'écriture du fichier");
+    }
+    const w=await h.createWritable();
+    await w.write(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+    await w.close();
+    const relue=cleDepuisTexte(await (await h.getFile()).text(), h.name);
+    verifierCle(relue, entrees);
+    _cleHandle=h;
+    return {verifie:true, cle:relue};
+  }
+  telechargerTexte(txt, CLE_NOM_FICHIER);
+  return {verifie:false, cle:construireCle(entrees.slice(), CLE_NOM_FICHIER)};
+}
+
+// Tire un code libre au hasard (pas séquentiel : le numéro ne dit rien de l'élève)
+function codesUtilises(){
+  const s=new Set();
+  (D.classes||[]).forEach(cl=>(cl.students||[]).forEach(st=>{
+    if(st.code) s.add(st.code);
+    if(CLE_RE.test(st.name||'')) s.add(st.name);
+  }));
+  if(_cle) _cle.entrees.forEach(e=>s.add(e.code));
+  if(_cleAttente) _cleAttente.attendues.forEach(e=>s.add(e.code));
+  return s;
+}
+function nouveauCode(utilises){
+  for(let k=0;k<200000;k++){
+    let n;
+    if(window.crypto&&crypto.getRandomValues){ const a=new Uint32Array(1); crypto.getRandomValues(a); n=1+(a[0]%9999); }
+    else n=1+Math.floor(Math.random()*9999);
+    const c='eleve'+String(n).padStart(4,'0');
+    if(!utilises.has(c)){ utilises.add(c); return c; }
+  }
+  throw new Error('plus aucun code libre');
+}
+function libelleClasse(cl){ return [cl.name, cl.annee].filter(Boolean).join(' '); }
+
+// ── Actions (boutons de la fenêtre « Clé des noms ») ──
+window.ouvrirCle=async function(){
+  try{
+    const r=await lireFichierCle(); if(!r) return;
+    _cle=r.cle; _cleHandle=r.handle;
+    toast(`🔑 Clé chargée — ${_cle.entrees.length} élève(s)`);
+    openModal('cle');
+  }catch(e){ alert('Clé illisible : '+(e&&e.message||e)); }
+};
+window.creerCle=function(){
+  if(_cle) return;
+  _cle=construireCle([], null); _cleHandle=null;
+  toast('🔑 Nouvelle clé vide créée — elle sera enregistrée au premier ajout');
+  openModal('cle');
+};
+window.fermerCle=function(){
+  _cle=null; _cleHandle=null; _cleAttente=null;
+  toast('🔒 Clé fermée — les noms ne sont plus affichés');
+  closeModal();
+};
+window.copieCle=function(){
+  if(!_cle) return;
+  telechargerTexte(cleVersTexte(_cle.entrees), CLE_NOM_FICHIER);
+  toast('⬇ Copie de la clé téléchargée');
+};
+
+// Remplace les vrais noms par les codes — SEULEMENT après que la clé a été
+// écrite et relue. En cas d'échec ou d'annulation, rien n'est modifié.
+window.pseudonymiserClasses=async function(){
+  if(!D.isProfMode) return;
+  const liste=elevesEnClair();
+  if(!liste.length){ toast('✓ Tous les élèves sont déjà pseudonymisés'); return; }
+  if(!confirm(`${liste.length} élève(s) sont enregistrés en ligne avec leur vrai nom.\n\n`+
+    `1. Une sauvegarde complète (.json, avec les vrais noms) va être téléchargée : rangez-la sur votre clé USB.\n`+
+    `2. Vous enregistrerez ensuite le fichier de clé (${CLE_NOM_FICHIER}) sur votre clé USB.\n`+
+    `3. Les noms ne seront remplacés par les codes qu'après vérification de ce fichier.\n\nContinuer ?`)) return;
+  try{ exportBackupJSON(); }
+  catch(e){ if(!confirm("La sauvegarde .json n'a pas pu être téléchargée. Continuer quand même ?")) return; }
+  const utilises=codesUtilises();
+  const affect=[], nouvelles=[];
+  liste.forEach(({cl,st})=>{
+    const ex=_cle && _cle.parId.get(String(st.id));
+    if(ex){ affect.push({clId:cl.id, stId:st.id, code:ex.code}); return; }
+    const e=Object.assign({code:nouveauCode(utilises), classe:libelleClasse(cl), id:String(st.id)}, separerNom(st.name));
+    nouvelles.push(e);
+    affect.push({clId:cl.id, stId:st.id, code:e.code});
+  });
+  const toutes=(_cle?_cle.entrees:[]).concat(nouvelles);
+  let res;
+  try{ res=await ecrireCle(toutes); }
+  catch(e){
+    if(e&&e.name==='AbortError'){ toast("Annulé — rien n'a été modifié"); return; }
+    alert("La clé n'a pas pu être enregistrée : "+(e&&e.message||e)+"\n\nRien n'a été modifié.");
+    return;
+  }
+  if(res.verifie){ appliquerPseudo(affect, res.cle, null); return; }
+  _cleAttente={affect, attendues:toutes};
+  openModal('cleVerif');
+};
+
+// Repli (Firefox, téléphone) : on fait rouvrir le fichier enregistré pour le vérifier
+window.verifierCleAttente=async function(){
+  if(!_cleAttente) return;
+  try{
+    const r=await lireFichierCle(); if(!r) return;
+    verifierCle(r.cle, _cleAttente.attendues);
+    appliquerPseudo(_cleAttente.affect, r.cle, r.handle);
+  }catch(e){
+    alert("Ce fichier ne correspond pas à la clé qui vient d'être téléchargée : "+(e&&e.message||e)+
+      "\n\nRien n'a été modifié. Ouvrez le bon fichier, ou relancez la pseudonymisation.");
+  }
+};
+
+function appliquerPseudo(affect, cle, handle){
+  _cle=cle; if(handle) _cleHandle=handle; _cleAttente=null;
+  const touchees=new Map(); let n=0;
+  affect.forEach(a=>{
+    const cl=D.classes.find(c=>c.id===a.clId); if(!cl) return;
+    const st=(cl.students||[]).find(s=>s.id===a.stId); if(!st) return;
+    st.code=a.code; st.name=a.code; n++;
+    touchees.set(cl.id, cl);
+  });
+  // Ordre enregistré = ordre des codes (qui ne dit rien de l'ordre alphabétique)
+  touchees.forEach(cl=>{ cl.students=sortStudentsStored(cl.students); });
+  saveData();
+  closeModal();
+  toast(`✓ ${n} élève(s) pseudonymisé(s) — seuls les codes sont en ligne`);
+}
+
+// Ajout d'élèves : codes générés, clé réécrite AVANT l'enregistrement en ligne
+async function ajouterElevesPseudo(cl, names){
+  if(!_cle){
+    closeModal();
+    alert("Ouvrez d'abord votre clé des noms (ou créez-en une) : les nouveaux élèves y seront ajoutés.");
+    openModal('cle');
+    return;
+  }
+  const utilises=codesUtilises();
+  const nouvelles=names.map(n=>Object.assign({code:nouveauCode(utilises), classe:libelleClasse(cl), id:uid()}, separerNom(n)));
+  let res;
+  try{ res=await ecrireCle(_cle.entrees.concat(nouvelles)); }
+  catch(e){
+    if(e&&e.name==='AbortError'){ toast("Annulé — aucun élève ajouté"); return; }
+    alert("La clé n'a pas pu être enregistrée : "+(e&&e.message||e)+"\n\nAucun élève n'a été ajouté.");
+    return;
+  }
+  _cle=res.cle;
+  if(!cl.students) cl.students=[];
+  nouvelles.forEach(e=>cl.students.push({id:e.id, code:e.code, name:e.code}));
+  cl.students=sortStudentsStored(cl.students);
+  saveData(); closeModal();
+  toast(res.verifie
+    ? `✓ ${names.length} élève(s) ajouté(s) — clé mise à jour`
+    : `✓ ${names.length} élève(s) ajouté(s) — ⚠️ remplacez le fichier de clé de votre clé USB par celui qui vient d'être téléchargé`);
+}
+
+// Avant un export : prévient si la clé manque (l'export contiendrait les codes)
+function exportSansCleOk(cl){
+  if(_cle || !(cl.students||[]).some(estPseudo)) return true;
+  return confirm("La clé des noms n'est pas chargée : l'export contiendra les codes (eleve0042…) à la place des noms.\n\nContinuer quand même ?");
+}
+
+function cleBoutonHTML(){
+  const nClair=elevesEnClair().length;
+  const style=_cle?'background:#dcfce7;border-color:#86efac':(nClair?'background:#fef3c7;border-color:#fcd34d':'');
+  const titre=_cle?`Clé des noms chargée (${_cle.entrees.length} élèves)`:'Clé des noms non chargée — les élèves apparaissent sous leur code';
+  return `<button class="btn btn-sm btn-icon" title="${esc(titre)}" style="${style}" onclick="openModal('cle')">🔑${nClair?`<sup style="color:#b91c1c;font-weight:700">${nClair}</sup>`:''}</button>`;
+}
+function cleBanniereHTML(){
+  const nClair=elevesEnClair().length;
+  if(!nClair) return '';
+  return `<div class="info-banner" style="background:#fef3c7;border-color:#fcd34d;color:#78350f;margin-bottom:12px">
+    🛡 ${nClair} élève${nClair>1?'s sont':' est'} encore enregistré${nClair>1?'s':''} en ligne avec ${nClair>1?'leur':'son'} vrai nom.
+    <button class="btn btn-sm" style="margin-left:8px" onclick="openModal('cle')">Pseudonymiser…</button></div>`;
+}
+function cleModalHTML(){
+  const nClair=elevesEnClair().length;
+  let nPseudo=0, nSansNom=0;
+  (D.classes||[]).forEach(cl=>(cl.students||[]).forEach(st=>{
+    if(!estPseudo(st)) return;
+    nPseudo++;
+    if(_cle && !_cle.parCode.has(st.code)) nSansNom++;
+  }));
+  let h=`<div class="modal-title">🔑 Clé des noms</div>`;
+  if(_cle){
+    h+=`<div class="info-banner" style="background:#dcfce7;border-color:#86efac;color:#14532d">
+      Clé chargée : <strong>${esc(_cle.nomFichier)}</strong> — ${_cle.entrees.length} élève(s).<br>
+      Les vrais noms restent dans cet onglet uniquement ; ils sont oubliés à sa fermeture.</div>`;
+    if(nSansNom) h+=`<div class="info-banner" style="background:#fee2e2;border-color:#fca5a5;color:#7f1d1d">
+      ⚠️ ${nSansNom} code(s) de vos classes sont absents de ce fichier : ils restent affichés sous leur code. Est-ce la bonne clé, la plus récente ?</div>`;
+  } else {
+    h+=`<div class="info-banner">Clé non chargée : les élèves pseudonymisés apparaissent sous leur code (eleve0042…).
+      Ouvrez le fichier <strong>${CLE_NOM_FICHIER}</strong> de votre clé USB pour voir les noms.</div>`;
+  }
+  h+=`<div class="form-group">`;
+  if(!_cle){
+    h+=`<button class="btn btn-sm btn-primary" style="width:100%;text-align:left;margin-bottom:6px" onclick="ouvrirCle()">📂 Ouvrir ma clé (fichier CSV)</button>`;
+    h+=`<button class="btn btn-sm" style="width:100%;text-align:left;margin-bottom:6px" onclick="creerCle()">✨ Créer une nouvelle clé (première utilisation)</button>`;
+  } else {
+    h+=`<button class="btn btn-sm" style="width:100%;text-align:left;margin-bottom:6px" onclick="copieCle()">⬇ Télécharger une copie de secours de la clé</button>`;
+    h+=`<button class="btn btn-sm" style="width:100%;text-align:left;margin-bottom:6px" onclick="fermerCle()">🔒 Fermer la clé (masquer les noms)</button>`;
+  }
+  h+=`</div>`;
+  h+=`<div class="form-group"><label class="form-label">Pseudonymisation</label>`;
+  if(_cleAttente){
+    h+=`<div class="info-banner" style="background:#fef3c7;border-color:#fcd34d;color:#78350f">Une pseudonymisation attend la vérification du fichier de clé téléchargé.</div>
+      <button class="btn btn-sm btn-primary" style="width:100%;text-align:left;margin-bottom:6px" onclick="openModal('cleVerif')">✔ Reprendre la vérification</button>`;
+  } else if(nClair){
+    h+=`<div style="font-size:12px;margin-bottom:6px">${nClair} élève(s) sont encore enregistrés en ligne avec leur vrai nom${nPseudo?` (${nPseudo} déjà pseudonymisés)`:''}.</div>
+      <button class="btn btn-sm btn-primary" style="width:100%;text-align:left;margin-bottom:6px" onclick="pseudonymiserClasses()">🛡 Pseudonymiser ces ${nClair} élève(s)</button>
+      <div class="form-hint">Une sauvegarde .json est d'abord téléchargée, puis la clé est enregistrée et vérifiée. Les noms ne sont remplacés qu'après.</div>`;
+  } else {
+    h+=`<div style="font-size:12px">✓ Tous vos élèves (${nPseudo}) sont pseudonymisés : seuls les codes sont en ligne.</div>`;
+  }
+  h+=`<div class="form-hint" style="margin-top:8px">N'écrivez jamais de nom dans les champs libres (motif de sortie, noms de groupes…) : ils partent en ligne tels quels.</div></div>`;
+  return h;
+}
+function cleVerifModalHTML(){
+  return `<div class="modal-title">✔ Vérification de la clé</div>
+    <div class="info-banner">Le fichier <strong>${CLE_NOM_FICHIER}</strong> vient d'être téléchargé.<br>
+      1. Déplacez-le sur votre clé USB (il remplace l'ancien s'il y en a un).<br>
+      2. Ouvrez-le ci-dessous pour vérification.<br>
+      Les noms ne seront remplacés par les codes qu'après cette vérification. Si vous fermez cette fenêtre, rien n'est modifié.</div>
+    <button class="btn btn-sm btn-primary" style="width:100%;text-align:left" onclick="verifierCleAttente()">📂 Ouvrir le fichier enregistré</button>`;
 }
 
 function fmtDate(iso) {
@@ -536,7 +938,7 @@ function migrateData(){
     // 1bis) tri alphabétique des élèves des classes déjà existantes
     if(cl.students && cl.students.length>1){
       const before=cl.students.map(s=>s.id).join(',');
-      cl.students=sortStudents(cl.students);
+      cl.students=sortStudentsStored(cl.students);
       if(cl.students.map(s=>s.id).join(',')!==before) changed=true;
     }
     // 2) items tagués sur un ancien code de compétence disparu.
@@ -577,6 +979,7 @@ function migrateData(){
 function render() {
   captureScroll();          // avant que le HTML ne soit reconstruit
   migrateData();
+  garderPseudo();
   renderTopbar();
   const mc=document.getElementById('main-content');
   if(nav.screen==='home')       renderHome(mc);
@@ -727,10 +1130,13 @@ function renderTopbar() {
     if(nav.screen!=='home')  rh+=`<button class="btn btn-sm" onclick="openModal('addSeq')">+ Séquence</button>`;
     if(nav.screen==='class') rh+=`<button class="btn btn-sm" onclick="openModal('addStudent')">+ Élèves</button>`;
     if(nav.screen==='seq')   rh+=`<button class="btn btn-sm btn-icon" title="Vidéoprojecteur" onclick="openProjector()">⊞</button>`;
+    rh+=cleBoutonHTML();
     rh+=`<button class="btn btn-sm btn-icon" title="Paramètres" onclick="openModal('settings')">⚙</button>`;
     rh+=`<span class="badge" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5">Prof</span>`;
     rh+=`<button class="btn btn-sm btn-danger" onclick="logoutProf()">✕</button>`;
   } else {
+    // Hors mode prof (déconnexion) : la clé des noms est oubliée
+    if(_cle||_cleHandle||_cleAttente){ _cle=null; _cleHandle=null; _cleAttente=null; }
     if(nav.screen==='seq') rh+=`<button class="btn btn-sm btn-icon" title="Vidéoprojecteur" onclick="openProjector()">⊞</button>`;
     // PAS de bouton "Mode prof" visible — activation par triple-clic logo ou Ctrl+Shift+P
   }
@@ -746,6 +1152,7 @@ function renderHome(mc) {
   let h=`<div class="page">`;
   if(D.isProfMode){
     // ── Vue prof : toutes les classes ──────────────────────────────────────
+    h+=cleBanniereHTML();
     const years = allSchoolYears();
     const curY  = currentSchoolYear();
     if(!nav.anneeFilter) nav.anneeFilter = curY;
@@ -890,7 +1297,7 @@ function renderClass(mc) {
     h+=groupesFilterHTML(cl);
     h+=`<div class="student-pills">`;
     sts.forEach(st=>{
-      h+=`<div class="student-pill">${groupeDotsHTML(cl,st)}${esc(st.name)}`;
+      h+=`<div class="student-pill">${groupeDotsHTML(cl,st)}${esc(nomEleve(st))}`;
       h+=`<button class="pill-del" onclick="openModal('archiveStudent','${st.id}')" title="Sortir cet élève (démission, exclusion, changement de section…)">📤</button>`;
       h+=`</div>`;
     });
@@ -905,7 +1312,7 @@ function renderClass(mc) {
         const reason=ARCHIVE_REASONS[st.archiveReason]||'Sorti';
         const d=st.archiveDate?fmtDate(st.archiveDate):'';
         const detail=[reason,d].filter(Boolean).join(' · ')+(st.archiveNote?` — ${esc(st.archiveNote)}`:'');
-        h+=`<div class="student-pill" style="opacity:.65" title="${esc(detail)}">${esc(st.name)}
+        h+=`<div class="student-pill" style="opacity:.65" title="${esc(detail)}">${esc(nomEleve(st))}
           <span style="font-size:9px;color:var(--text3);margin-left:4px">(${esc(reason)}${d?' · '+d:''})</span>
           <button class="pill-del" style="color:var(--green)" onclick="restoreStudent('${st.id}')" title="Réintégrer dans la classe">↩</button>
           <button class="pill-del" onclick="deleteItem('student','${st.id}')" title="Supprimer définitivement (perte des données)">🗑</button>
@@ -1066,7 +1473,7 @@ function renderGlobalView(cl) {
     });
 
     sts.forEach(st=>{
-      h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+      h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(nomEleve(st),false)}</td>`;
       acts.forEach(act=>{
         const _sdGV=(act.studentData||{})[st.id]||{};
         const mm=_sdGV.manualMark;
@@ -1128,7 +1535,7 @@ function renderGlobalView(cl) {
       h+=`</tr></thead><tbody>`;
       sts.forEach(st=>{
         const sLvls=computeSocleAcq(cl,sq,st.id);
-        h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+        h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(nomEleve(st),false)}</td>`;
         SOCLE.forEach(dom=>{
           const lv=sLvls[dom.id];
           if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3)">·</td>`;return;}
@@ -1178,7 +1585,7 @@ function renderAnnualCompTable(cl) {
   if(hasComps) comps.forEach(c=>h+=`<th style="font-size:9px;padding:3px 2px;background:${c.color};color:${c.text};cursor:help" title="${esc(compTip(cl,c))}">${c.short}</th>`);
   h+=vsHead()+`</tr></thead><tbody>`;
   sts.forEach(st=>{
-    h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+    h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(nomEleve(st),false)}</td>`;
     if(hasComps){
       const lvls=computeCompAcqAnnuelle(cl,st.id);
       comps.forEach(c=>{
@@ -1198,7 +1605,7 @@ function renderAnnualCompTable(cl) {
     h+=`</tr></thead><tbody>`;
     sts.forEach(st=>{
       const sLvls=computeSocleAcqAnnuelle(cl,st.id);
-      h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+      h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(nomEleve(st),false)}</td>`;
       SOCLE.forEach(dom=>{
         const lv=sLvls[dom.id];
         if(!lv){h+=`<td style="font-size:9px;text-align:center;color:var(--text3)">·</td>`;return;}
@@ -1342,7 +1749,7 @@ function renderActivity(act,sts,cl,forProj) {
       });
       h+=`</tr></thead><tbody>`;
       sts.forEach(st=>{
-        h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+        h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(nomEleve(st),false)}</td>`;
         qcms.forEach(q=>{
           const score=(q.scores||{})[st.id];
           const isA=score==='A', isN=score==='N', isSpecial=isA||isN;
@@ -1466,7 +1873,7 @@ function renderActTable(act,sts,cl,forProj) {
     const pres=_sd.presence||{}, ch=_sd.checks||{}, tae=_sd.tae||{};
     const allAbsent=sessions.length>0&&sessions.every(s=>['absent','exclu','none'].includes(pres[s.id]||'none')&&(pres[s.id]||'none')!=='retard');
 
-    h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(st.name,false)}</td>`;
+    h+=`<tr><td class="td-student">${groupeDotsHTML(cl,st)}${displayName(nomEleve(st),false)}</td>`;
 
     sessions.forEach((sess,si)=>{
       const p=pres[sess.id]||'none';
@@ -1821,7 +2228,7 @@ window.restoreStudent=function(id){
   const st=(cl.students||[]).find(s=>s.id===id); if(!st) return;
   st.archived=false;
   delete st.archiveReason; delete st.archiveDate; delete st.archiveNote;
-  saveData(); render(); toast(`✓ ${st.name} réintégré(e)`);
+  saveData(); render(); toast(`✓ ${nomEleve(st)} réintégré(e)`);
 };
 window.deleteItem=function(type,id,parentId){
   const cl=curClass();
@@ -1912,6 +2319,10 @@ window.openModal=function(type,extra){
       <div class="form-group"><label class="form-label">Nouveau mot de passe</label>
         <input class="form-input" id="m-np" type="password" autofocus>
         <div class="form-hint">Défaut : prof1234</div></div>`;
+  } else if(type==='cle'){
+    html=cleModalHTML(); showConfirm=false;
+  } else if(type==='cleVerif'){
+    html=cleVerifModalHTML(); showConfirm=false;
   } else if(type==='settings'){
     const syncInfo = {
       local:        '⚪ Mode local (Supabase non configuré)',
@@ -1927,6 +2338,10 @@ window.openModal=function(type,extra){
         <label class="form-label">État Supabase</label>
         <div style="font-size:12px;padding:6px 10px;background:var(--bg3);border-radius:6px;margin-bottom:10px">${syncInfo}</div>
         <button class="btn btn-sm" style="width:100%;text-align:left;margin-bottom:6px" onclick="forceSyncFromSupabase();closeModal()">🔄 Forcer la synchronisation</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Noms des élèves</label>
+        <button class="btn btn-sm" style="width:100%;text-align:left;margin-bottom:6px" onclick="openModal('cle')">🔑 Clé des noms et pseudonymisation</button>
       </div>
       <div class="form-group">
         <label class="form-label">Backup JSON</label>
@@ -2012,7 +2427,8 @@ window.openModal=function(type,extra){
         <input class="form-input" id="m-name" placeholder="Ex: Maths – Probabilités" autofocus></div>`;
   } else if(type==='addStudent'){
     html=`<div class="modal-title">Ajouter des élèves</div>
-      <div class="info-banner">Un élève par ligne. Coller depuis un tableur fonctionne.</div>
+      <div class="info-banner">Un élève par ligne (NOM Prénom). Coller depuis un tableur fonctionne.<br>
+        Seul un code (eleve0042…) part en ligne ; le nom est ajouté à votre clé des noms${_cle?'':' — <strong>ouvrez-la d\'abord (🔑)</strong>'}.</div>
       <div class="form-group"><label class="form-label">Noms (un par ligne)</label>
         <textarea class="form-textarea" id="m-names" placeholder="DUPONT Alice&#10;MARTIN Léo&#10;GARCIA Sofia" autofocus></textarea></div>`;
     confirmLabel='Ajouter';
@@ -2107,7 +2523,7 @@ window.openModal=function(type,extra){
     const cl=curClass(); if(!cl) return;
     const st=(cl.students||[]).find(s=>s.id===extra); if(!st){closeModal();return;}
     const today=new Date().toISOString().slice(0,10);
-    html=`<div class="modal-title">📤 Sortir ${esc(st.name)}</div>
+    html=`<div class="modal-title">📤 Sortir ${esc(nomEleve(st))}</div>
       <div style="font-size:11px;color:var(--text3);margin-bottom:10px">L'élève quitte la liste active mais ses notes et son historique sont conservés. Vous pourrez le réintégrer à tout moment.</div>
       <div class="form-group"><label class="form-label">Motif</label>
         <select class="form-select" id="m-arch-reason">
@@ -2264,7 +2680,7 @@ function renderGroupesModal(){
             ${esc(g.nom)}</span>`;
         }).join(' ');
         return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap">
-          <span style="min-width:100px;font-size:12px">${esc(st.name)}</span>
+          <span style="min-width:100px;font-size:12px">${esc(nomEleve(st))}</span>
           <span style="display:flex;gap:4px;flex-wrap:wrap">${chips}</span>
         </div>`;
       }).join('');
@@ -2389,10 +2805,8 @@ window.doModal=function(){
     const raw=document.getElementById('m-names').value;
     const names=raw.split('\n').map(n=>n.trim()).filter(Boolean); if(!names.length) return;
     const cl=curClass(); if(!cl) return;
-    if(!cl.students) cl.students=[];
-    names.forEach(n=>cl.students.push({id:uid(),name:n}));
-    cl.students=sortStudents(cl.students);
-    saveData();closeModal();render();toast(`✓ ${names.length} élève(s) ajouté(s)`);
+    // Pseudonymisation : codes générés, clé des noms réécrite AVANT l'envoi en ligne
+    ajouterElevesPseudo(cl,names);
   } else if(t==='addActivity'){
     const name=document.getElementById('m-name').value.trim(); if(!name) return;
     const sq=curSeq(); if(!sq) return;
@@ -2431,7 +2845,7 @@ window.doModal=function(){
     st.archiveReason=document.getElementById('m-arch-reason').value||'autre';
     st.archiveDate=document.getElementById('m-arch-date').value||new Date().toISOString().slice(0,10);
     st.archiveNote=(document.getElementById('m-arch-note').value||'').trim();
-    saveData(); closeModal(); render(); toast(`✓ ${st.name} sorti(e) de la liste active`);
+    saveData(); closeModal(); render(); toast(`✓ ${nomEleve(st)} sorti(e) de la liste active`);
   }
 };
 
@@ -2633,12 +3047,13 @@ async function syncProgItemToWDS(code, act) {
 // ── Export CSV
 window.doExportCSV=function(clId,sqId){
   const cl=D.classes.find(c=>c.id===clId); if(!cl) return;
+  if(!exportSansCleOk(cl)) return;
   const sq=(cl.sequences||[]).find(s=>s.id===sqId); if(!sq) return;
   const sts=activeStudents(cl), acts=sq.activities||[];
   const comps=getComps(cl);
   const rows=[['Élève',...acts.map(a=>a.name+' (/10)'),...comps.map(c=>c.short+' – '+c.label)]];
   sts.forEach(st=>{
-    const row=[st.name];
+    const row=[nomEleve(st)];
     acts.forEach(act=>{
       const r=computeScore(act,st.id);
       row.push(r&&!r.allAbsent?r.real.toFixed(2):(r&&r.allAbsent?'A':''));
@@ -2659,6 +3074,7 @@ window.doExportCSV=function(clId,sqId){
 // ── Export Livret Scolaire (3ème — Socle commun) ────────────────────────────
 window.exportLivret=function(clId, sqId){
   const cl=D.classes.find(c=>c.id===clId); if(!cl) return;
+  if(!exportSansCleOk(cl)) return;
   const sq=(cl.sequences||[]).find(s=>s.id===sqId); if(!sq) return;
   const sts=activeStudents(cl);
   // En-tête
@@ -2667,7 +3083,7 @@ window.exportLivret=function(clId, sqId){
   const rows=[['Élève', ...domNames.map(d=>d+' (niveau)'), ...domNames.map(d=>d+' (%)')  ]];
   sts.forEach(st=>{
     const sLvls=computeSocleAcq(cl,sq,st.id);
-    const row=[st.name];
+    const row=[nomEleve(st)];
     SOCLE.forEach(dom=>{ const lv=sLvls[dom.id]; row.push(lv?lv.label:''); });
     SOCLE.forEach(dom=>{ const lv=sLvls[dom.id]; row.push(lv?lv.pct.toFixed(0)+'%':''); });
     rows.push(row);
