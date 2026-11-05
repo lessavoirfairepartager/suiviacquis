@@ -985,6 +985,7 @@ function render() {
   if(nav.screen==='home')       renderHome(mc);
   else if(nav.screen==='class') renderClass(mc);
   else if(nav.screen==='seq')   renderSeq(mc);
+  activerGlisserSeq(mc);
   updateFab();
   fitGV();
   stickyHeads();
@@ -1269,9 +1270,9 @@ function renderClass(mc) {
     </div>`;
   }
   h+=`<div class="section-hdr"><span class="section-title">Séquences</span><span class="badge">${seqs.length}</span></div>`;
-  h+=`<div class="card-grid">`;
+  h+=`<div class="card-grid"${D.isProfMode?' data-glisser-seq':''}>`;
   seqs.forEach(sq=>{
-    h+=`<div class="card class-card" style="position:relative" onclick="goSeq('${sq.id}')">`;
+    h+=`<div class="card class-card" style="position:relative" data-sqid="${sq.id}" onclick="goSeq('${sq.id}')">`;
     if(D.isProfMode) h+=`<div style="position:absolute;top:8px;right:8px;display:flex;gap:2px" onclick="event.stopPropagation()">
       <button class="btn btn-xs btn-icon" onclick="renameItem('seq','${sq.id}')" title="Renommer">✏</button>
       <button class="btn btn-xs btn-icon" style="color:var(--red)" onclick="deleteItem('seq','${sq.id}')" title="Supprimer">✕</button>
@@ -1677,8 +1678,8 @@ function renderSeq(mc) {
   if(!cl){goHome();return;} if(!sq){goClass(nav.classId);return;}
   const sts=visibleStudents(cl),acts=sq.activities||[];
   let h='';
-  h+=`<div class="seq-tabs-wrap">`;
-  (cl.sequences||[]).forEach(s=>h+=`<button class="seq-tab${s.id===nav.seqId?' active':''}" onclick="goSeq('${s.id}')">${esc(s.name)}</button>`);
+  h+=`<div class="seq-tabs-wrap"${D.isProfMode?' data-glisser-seq title="Glisser un onglet pour réordonner les séquences"':''}>`;
+  (cl.sequences||[]).forEach(s=>h+=`<button class="seq-tab${s.id===nav.seqId?' active':''}" data-sqid="${s.id}" onclick="goSeq('${s.id}')">${esc(s.name)}</button>`);
   if(D.isProfMode) h+=`<button class="seq-tab seq-tab-more" onclick="openModal('addSeq')" title="Nouvelle séquence">+</button>`;
   h+=`</div><div class="page">`;
   h+=groupesFilterHTML(cl);
@@ -1689,6 +1690,134 @@ function renderSeq(mc) {
   });
   h+=`</div>`;
   mc.innerHTML=h;
+}
+
+// ── Réordonner les séquences par glisser-déposer ────────────────────────────
+// Onglets de la vue séquence et cartes de la vue classe (mode prof seulement).
+// Souris : on glisse dès 6 px de déplacement (un simple clic ouvre toujours la
+// séquence). Tactile : appui long (~0,35 s) puis glisser, pour ne pas gêner le
+// défilement horizontal des onglets. Clavier : Alt + ← / → sur l'onglet actif.
+// L'ordre est celui du tableau cl.sequences : vue globale, bilan annuel et
+// onglets le suivent tous, et il est synchronisé comme le reste des données.
+function reordonnerSequences(cl, ids){
+  const parId=new Map((cl.sequences||[]).map(s=>[String(s.id),s]));
+  const neuf=ids.map(id=>parId.get(String(id))).filter(Boolean);
+  (cl.sequences||[]).forEach(s=>{ if(!neuf.includes(s)) neuf.push(s); });
+  const avant=(cl.sequences||[]).map(s=>String(s.id)).join('|');
+  if(neuf.map(s=>String(s.id)).join('|')===avant) return false;
+  cl.sequences=neuf;
+  saveData();
+  return true;
+}
+
+function activerGlisserSeq(root){
+  if(!D.isProfMode||!root) return;
+  root.querySelectorAll('[data-glisser-seq]').forEach(wrap=>{
+    if(wrap._glisser) return;
+    wrap._glisser=true;
+    let g=null;          // geste en cours
+    let bloquerClic=false;
+
+    const items=()=>Array.from(wrap.querySelectorAll(':scope > [data-sqid]'));
+    const fin=()=>{
+      if(!g) return;
+      clearTimeout(g.timer);
+      document.removeEventListener('pointermove',bouge,true);
+      document.removeEventListener('pointerup',lache,true);
+      document.removeEventListener('pointercancel',annule,true);
+      document.removeEventListener('touchmove',bloqueScroll,{capture:true});
+      document.removeEventListener('contextmenu',bloqueMenu,true);
+      if(g.el) g.el.classList.remove('seq-glisse');
+      wrap.classList.remove('seq-glisser-actif');
+      window._glisserEnCours=false;
+      g=null;
+    };
+    const demarre=()=>{
+      g.actif=true;
+      window._glisserEnCours=true;
+      g.el.classList.add('seq-glisse');
+      wrap.classList.add('seq-glisser-actif');
+      if(navigator.vibrate&&g.tactile) try{navigator.vibrate(15);}catch(e){}
+    };
+    const bloqueScroll=e=>{ if(g&&g.actif&&e.cancelable) e.preventDefault(); };
+    const bloqueMenu=e=>{ if(g) e.preventDefault(); };
+
+    const bouge=e=>{
+      if(!g||e.pointerId!==g.id) return;
+      const dx=e.clientX-g.x0, dy=e.clientY-g.y0, d=Math.hypot(dx,dy);
+      if(!g.actif){
+        if(g.tactile){ if(d>8) fin(); return; }   // le doigt a bougé : c'est un défilement
+        if(d<6) return;
+        demarre();
+      }
+      e.preventDefault();
+      // défilement automatique de la barre d'onglets près des bords
+      const r=wrap.getBoundingClientRect();
+      if(wrap.scrollWidth>wrap.clientWidth){
+        if(e.clientX<r.left+30) wrap.scrollLeft-=12;
+        else if(e.clientX>r.right-30) wrap.scrollLeft+=12;
+      }
+      const sous=document.elementFromPoint(e.clientX,e.clientY);
+      const cible=sous&&sous.closest('[data-sqid]');
+      if(!cible||cible===g.el||cible.parentNode!==wrap) return;
+      const liste=items();
+      if(liste.indexOf(cible)>liste.indexOf(g.el)) wrap.insertBefore(g.el,cible.nextSibling);
+      else wrap.insertBefore(g.el,cible);
+    };
+    const lache=e=>{
+      if(!g||e.pointerId!==g.id) return;
+      const actif=g.actif;
+      fin();
+      if(!actif) return;
+      bloquerClic=true; setTimeout(()=>{bloquerClic=false;},400);
+      const cl=curClass();
+      if(cl&&reordonnerSequences(cl,items().map(x=>x.dataset.sqid))) toast('✓ Ordre des séquences enregistré');
+      render();
+    };
+    const annule=e=>{
+      if(!g||e.pointerId!==g.id) return;
+      const actif=g.actif;
+      fin();
+      if(actif) render();   // remet l'ordre enregistré
+    };
+
+    wrap.addEventListener('pointerdown',e=>{
+      if(g||(e.pointerType==='mouse'&&e.button!==0)) return;
+      const el=e.target.closest('[data-sqid]');
+      if(!el||el.parentNode!==wrap) return;
+      if(e.target.closest('.btn')) return;   // boutons Renommer / Supprimer des cartes
+      g={id:e.pointerId,el,x0:e.clientX,y0:e.clientY,actif:false,tactile:e.pointerType!=='mouse'};
+      document.addEventListener('pointermove',bouge,true);
+      document.addEventListener('pointerup',lache,true);
+      document.addEventListener('pointercancel',annule,true);
+      document.addEventListener('touchmove',bloqueScroll,{capture:true,passive:false});
+      document.addEventListener('contextmenu',bloqueMenu,true);
+      if(g.tactile) g.timer=setTimeout(()=>{ if(g&&!g.actif) demarre(); },350);
+    });
+    // le clic qui suit un glisser ne doit pas ouvrir la séquence
+    wrap.addEventListener('click',e=>{
+      if(bloquerClic){ e.stopPropagation(); e.preventDefault(); bloquerClic=false; }
+    },true);
+    // empêche le glisser natif (image fantôme) du navigateur
+    wrap.addEventListener('dragstart',e=>e.preventDefault());
+    // clavier : Alt + flèche gauche / droite déplace l'élément qui a le focus
+    wrap.addEventListener('keydown',e=>{
+      if(!e.altKey||(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')) return;
+      const el=e.target.closest('[data-sqid]'); if(!el||el.parentNode!==wrap) return;
+      e.preventDefault();
+      const cl=curClass(); if(!cl) return;
+      const ids=items().map(x=>x.dataset.sqid), i=ids.indexOf(el.dataset.sqid);
+      const j=e.key==='ArrowLeft'?i-1:i+1;
+      if(j<0||j>=ids.length) return;
+      ids.splice(j,0,ids.splice(i,1)[0]);
+      if(reordonnerSequences(cl,ids)){
+        const id=el.dataset.sqid;
+        render();
+        const n=document.querySelector(`[data-glisser-seq] > [data-sqid="${id}"]`);
+        if(n) n.focus();
+      }
+    });
+  });
 }
 
 // ── Activity ─────────────────────────────────────────────────────────────────

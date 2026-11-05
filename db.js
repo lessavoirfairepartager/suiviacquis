@@ -211,9 +211,20 @@ function mergeById(base, local, remote){
     const v = merge3(b, lm.get(id), rm.get(id));
     if (v !== undefined) out.push(v);
   };
-  local.forEach(x => take(String(x.id)));   // l'ordre local d'abord
-  remote.forEach(x => take(String(x.id)));  // puis ce qui n'existe que là-bas
+  // Ordre : celui du local, sauf si seul le distant a réordonné (ex. séquences
+  // déplacées par glisser-déposer sur un autre appareil pendant qu'ici on
+  // saisissait une note) : on adopte alors l'ordre distant.
+  const premier = (bm && ordreInchange(base, local) && !ordreInchange(base, remote)) ? remote : local;
+  const second  = premier === local ? remote : local;
+  premier.forEach(x => take(String(x.id)));
+  second.forEach(x => take(String(x.id)));  // puis ce qui n'existe que de l'autre côté
   return out;
+}
+// Vrai si les éléments communs à base et arr y sont dans le même ordre relatif.
+function ordreInchange(base, arr){
+  const a = (base || []).map(x => String(x.id)), b = arr.map(x => String(x.id));
+  const sa = new Set(a), sb = new Set(b);
+  return a.filter(id => sb.has(id)).join('\u0001') === b.filter(id => sa.has(id)).join('\u0001');
 }
 window._merge3 = merge3; // exposé pour les tests
 
@@ -234,6 +245,7 @@ function fetchAvecDelai(input, init){
 
 // ── Rendu différé si l'utilisateur est en train de saisir ──────────────────────
 function userBusy(){
+  if (typeof window !== 'undefined' && window._glisserEnCours) return true; // glisser-déposer en cours
   if (Date.now() - _lastLocalActivity < ACTIVITY_GUARD_MS) return true;
   const a = (typeof document !== 'undefined') ? document.activeElement : null;
   return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable));

@@ -65,6 +65,10 @@ body { font-family:var(--font); font-size:13px; color:var(--text); background:va
 .seq-tab.active { color:var(--blue); border-color:var(--border); background:var(--bg); border-bottom-color:var(--bg); font-weight:600; }
 .seq-tab-more { font-size:11px; padding:7px 10px; color:var(--text3); }
 .seq-tab-more:hover { color:var(--text); }
+/* réordonner les séquences (mode prof) */
+[data-glisser-seq] > [data-sqid] { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+.seq-glisser-actif, .seq-glisser-actif * { cursor:grabbing !important; }
+.seq-glisse { opacity:.55; outline:2px dashed var(--blue); outline-offset:-2px; }
 
 /* ACTIVITY BLOCK */
 .act-block { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius-lg); margin-bottom:16px; overflow:hidden; }
